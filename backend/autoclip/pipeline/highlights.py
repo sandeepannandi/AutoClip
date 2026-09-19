@@ -139,6 +139,7 @@ async def detect(
     semaphore = asyncio.Semaphore(concurrency)
     completed = 0
     lock = asyncio.Lock()
+    failed_windows: list[str] = []
 
     async def run_window(window: TranscriptWindow) -> list[ClipCandidate]:
         nonlocal completed
@@ -148,6 +149,8 @@ async def detect(
                 candidates = result.clips
             except Exception as exc:
                 # One bad window shouldn't lose the whole video's other windows.
+                message = str(exc).splitlines()[0][:300]
+                failed_windows.append(f"words {window.first_word}-{window.last_word}: {message}")
                 log.warning(
                     "Window %d-%d failed (%s); continuing with the remaining windows.",
                     window.first_word,
@@ -165,10 +168,29 @@ async def detect(
     candidates = [c for group in results for c in group]
 
     if not candidates:
+        # "No clips" has two very different causes, and only one of them is
+        # fixed by a bigger model. When windows actually errored, surface the
+        # real errors — the model never got a fair chance to answer.
+        if failed_windows:
+            summary = "\n".join(f"- {failure}" for failure in failed_windows[:5])
+            if len(failed_windows) > 5:
+                summary += f"\n- ... and {len(failed_windows) - 5} more window(s)"
+            raise HighlightError(
+                f"Highlight detection failed for all {len(failed_windows)} window(s). "
+                "The model never returned usable clips.\n" + summary
+            )
         raise HighlightError(
             "No clips were found. This can mean the video genuinely has no "
             "self-contained highlights, or that the model struggled with the "
             "transcript — try a larger model or a different provider."
+        )
+
+    if failed_windows:
+        log.warning(
+            "%d of %d window(s) failed and contributed no clips: %s",
+            len(failed_windows),
+            len(windows),
+            "; ".join(failed_windows),
         )
 
     log.info("Providers proposed %d raw candidates.", len(candidates))

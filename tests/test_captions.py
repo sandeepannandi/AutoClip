@@ -99,6 +99,32 @@ class TestPresets:
         with pytest.raises(ValueError, match="Unknown caption style"):
             captions.get_style("neon-explosion")
 
+    def test_clean_lower_is_set_in_inter(self) -> None:
+        # Inter is the whole reason this preset reads as professional rather than
+        # as a shout; if the family name drifts, libass substitutes silently and
+        # the caption stops matching the style list it was picked from.
+        style = captions.get_style("clean_lower")
+
+        assert (style.font, style.font_file) == ("Inter", "Inter-Variable.ttf")
+
+    def test_clean_lower_is_the_lightest_preset(self) -> None:
+        style = captions.get_style("clean_lower")
+
+        # It has to stay the smallest and quietest preset, not just smaller than
+        # whichever ones happen to exist today.
+        assert style.size_ratio <= 0.045
+        assert style.size_ratio == min(other.size_ratio for other in captions.PRESETS.values())
+        assert style.outline_width <= 1.5
+        assert style.shadow <= 0.5
+
+    @pytest.mark.parametrize("key", ["bold_pop", "boxed"])
+    def test_high_energy_presets_entrance_animate(self, key: str) -> None:
+        assert captions.get_style(key).entrance is True
+
+    @pytest.mark.parametrize("key", ["karaoke_fill", "clean_lower"])
+    def test_calm_presets_do_not_entrance_animate(self, key: str) -> None:
+        assert captions.get_style(key).entrance is False
+
 
 class TestAssGeneration:
     @pytest.fixture
@@ -162,6 +188,13 @@ class TestAssGeneration:
 
         assert "quick" in " ".join(e.text for e in subs.events)
 
+    def test_clean_lower_render_is_set_in_inter(self, words: list[Word]) -> None:
+        # The preset is the only one in Inter; the generated styles are what
+        # libass actually reads, so assert on those rather than the dataclass.
+        subs = captions.build_ass(words, captions.get_style("clean_lower"), width=1080, height=1920)
+
+        assert subs.styles[captions.STYLE_NAME].fontname == "Inter"
+
     def test_karaoke_emits_kf_tags(self, words: list[Word]) -> None:
         subs = captions.build_ass(
             words, captions.get_style("karaoke_fill"), width=1080, height=1920
@@ -189,6 +222,53 @@ class TestAssGeneration:
 
         assert subs.styles[captions.STYLE_NAME].borderstyle == 3
 
+    def test_bottom_placement_is_the_default(self, words: list[Word]) -> None:
+        subs = captions.build_ass(words, captions.get_style("bold_pop"), width=1080, height=1920)
+
+        assert subs.styles[captions.STYLE_NAME].alignment == pysubs2.Alignment.BOTTOM_CENTER
+        assert subs.styles[captions.STYLE_NAME].marginv == round(1920 * 0.24)
+
+    @pytest.mark.parametrize(
+        ("position", "alignment", "marginv"),
+        [
+            ("bottom", pysubs2.Alignment.BOTTOM_CENTER, round(1920 * 0.24)),
+            ("middle", pysubs2.Alignment.MIDDLE_CENTER, 0),
+            ("top", pysubs2.Alignment.TOP_CENTER, round(1920 * 0.10)),
+        ],
+    )
+    def test_position_parameter_places_captions(
+        self, words: list[Word], position: str, alignment, marginv: int
+    ) -> None:
+        subs = captions.build_ass(
+            words,
+            captions.get_style("bold_pop"),
+            width=1080,
+            height=1920,
+            position=position,
+        )
+
+        ass_style = subs.styles[captions.STYLE_NAME]
+        assert ass_style.alignment == alignment
+        assert ass_style.marginv == marginv
+
+    def test_bold_pop_first_word_entrances(self, words: list[Word]) -> None:
+        style = captions.get_style("bold_pop")
+        groups = captions.group_words(words, max_words=style.max_words)
+        subs = captions.build_ass(words, style, width=1080, height=1920)
+
+        assert "\\move(" in subs.events[0].text
+        assert "\\fad(" in subs.events[0].text
+        # Each caption group entrances once, on its first word; later word
+        # events for the same group stay put so the line doesn't jitter.
+        assert sum("\\move(" in event.text for event in subs.events) == len(groups)
+
+    def test_clean_lower_emits_no_entrance_tags(self, words: list[Word]) -> None:
+        subs = captions.build_ass(words, captions.get_style("clean_lower"), width=1080, height=1920)
+
+        assert all(
+            "\\move(" not in event.text and "\\fad(" not in event.text for event in subs.events
+        )
+
     def test_events_never_start_before_zero(self, words: list[Word]) -> None:
         subs = captions.build_ass(
             words,
@@ -199,6 +279,37 @@ class TestAssGeneration:
         )
 
         assert all(event.start >= 0 for event in subs.events)
+
+    @pytest.mark.parametrize("key", list(captions.PRESETS))
+    def test_events_never_overlap(self, key: str, words: list[Word]) -> None:
+        # Only one caption line may ever be on screen at a time, for every
+        # preset and its animation mode.
+        subs = captions.build_ass(words, captions.get_style(key), width=1080, height=1920)
+
+        events = list(subs.events)
+        assert all(next_.start >= prev.end for prev, next_ in zip(events, events[1:], strict=False))
+
+    def test_overlapping_groups_are_serialised(self) -> None:
+        # A sentence break lands mid-overlap (the next word starts before the
+        # sentence-ending word finishes). The following group must wait for the
+        # current line to clear rather than stacking a second line.
+        words = words_from([("Hello.", 0.0, 1.2), ("world", 0.9, 1.6)])
+
+        subs = captions.build_ass(words, captions.get_style("clean_lower"), width=1080, height=1920)
+
+        first, second = list(subs.events)
+        assert first.start == 0
+        assert first.end == pysubs2.make_time(s=1.2)
+        assert second.start == first.end
+        assert second.end == pysubs2.make_time(s=1.6)
+
+    def test_srt_cues_never_overlap(self, tmp_path) -> None:
+        words = words_from([("Hello.", 0.0, 1.2), ("world", 0.9, 1.6)])
+
+        path = captions.write_srt(tmp_path / "out.srt", words)
+
+        cues = list(pysubs2.load(str(path), encoding="utf-8").events)
+        assert all(next_.start >= prev.end for prev, next_ in zip(cues, cues[1:], strict=False))
 
     def test_written_file_is_valid_ass(self, words: list[Word], tmp_path) -> None:
         path = captions.write_ass(
@@ -218,3 +329,60 @@ class TestAssGeneration:
 
         assert path.exists()
         assert len(pysubs2.load(str(path), encoding="utf-8").events) > 0
+
+    def test_primary_override_replaces_the_style_primary(self, words: list[Word]) -> None:
+        subs = captions.build_ass(
+            words,
+            captions.get_style("clean_lower"),
+            width=1080,
+            height=1920,
+            primary_override="#FFE500",
+        )
+
+        colour = subs.styles[captions.STYLE_NAME].primarycolor
+        assert (colour.r, colour.g, colour.b) == (255, 229, 0)
+
+    def test_without_override_the_preset_primary_is_emitted(self, words: list[Word]) -> None:
+        subs = captions.build_ass(words, captions.get_style("clean_lower"), width=1080, height=1920)
+
+        colour = subs.styles[captions.STYLE_NAME].primarycolor
+        assert (colour.r, colour.g, colour.b) == (255, 255, 255)
+
+    def test_secondary_stays_preset_controlled(self, words: list[Word]) -> None:
+        # clean_lower has no accent, so the secondary colour falls back to the
+        # preset primary, not the override — the override only replaces primary.
+        style = captions.get_style("clean_lower")
+        subs = captions.build_ass(words, style, width=1080, height=1920, primary_override="#FFE500")
+
+        ass_style = subs.styles[captions.STYLE_NAME]
+        assert ass_style.secondarycolor == captions.hex_to_ass(style.primary)
+
+    def test_primary_override_never_mutates_the_preset(self, words: list[Word], tmp_path) -> None:
+        style = captions.get_style("clean_lower")
+        before = style.primary
+
+        captions.build_ass(words, style, width=1080, height=1920, primary_override="#FFE500")
+        captions.write_ass(
+            tmp_path / "never_mutates.ass",
+            words,
+            style,
+            width=1080,
+            height=1920,
+            primary_override="#FFE500",
+        )
+
+        assert captions.get_style("clean_lower").primary == before
+
+    def test_written_file_carries_the_primary_override(self, words: list[Word], tmp_path) -> None:
+        path = captions.write_ass(
+            tmp_path / "coloured.ass",
+            words,
+            captions.get_style("clean_lower"),
+            width=1080,
+            height=1920,
+            primary_override="#FFE500",
+        )
+
+        reloaded = pysubs2.load(str(path), encoding="utf-8")
+        colour = reloaded.styles[captions.STYLE_NAME].primarycolor
+        assert (colour.r, colour.g, colour.b) == (255, 229, 0)

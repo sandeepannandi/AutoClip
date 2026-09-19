@@ -5,6 +5,7 @@ import {
   api,
   formatBytes,
   formatDuration,
+  type CaptionPosition,
   type CaptionStyle,
   type Clip,
   type CropPath,
@@ -18,6 +19,20 @@ import { TrimBar } from '../components/TrimBar'
 
 const RATIOS = ['9:16', '1:1', '16:9'] as const
 
+const POSITIONS: { key: CaptionPosition; label: string }[] = [
+  { key: 'bottom', label: 'Bottom' },
+  { key: 'middle', label: 'Middle' },
+  { key: 'top', label: 'Top' },
+]
+
+// The export-grade presets, excluding "none" which is what the toggle-off state means.
+const GRADES: { key: string; label: string }[] = [
+  { key: 'warm', label: 'Warm' },
+  { key: 'punchy', label: 'Punchy' },
+  { key: 'cool', label: 'Cool' },
+  { key: 'film', label: 'Film' },
+]
+
 export function Review() {
   const { jobId } = useParams()
   const [job, setJob] = useState<Job | null>(null)
@@ -30,6 +45,8 @@ export function Review() {
   const [savingWords, setSavingWords] = useState(false)
   const [exporting, setExporting] = useState<Set<string>>(new Set())
   const [error, setError] = useState<Error | null>(null)
+  // A/B preview: while true, the player strips the grade to show the original.
+  const [compareGrade, setCompareGrade] = useState(false)
 
   useEffect(() => {
     if (!jobId) return
@@ -114,11 +131,35 @@ export function Review() {
     }
   }
 
+  const setPosition = async (clip: Clip, position: CaptionPosition) => {
+    try {
+      patchClip(await api.patchCaptions(clip.id, { caption_position: position }))
+    } catch (err) {
+      setError(err as Error)
+    }
+  }
+
+  const setColorGrade = async (clip: Clip, grade: string) => {
+    try {
+      patchClip(await api.patchCaptions(clip.id, { color_grade: grade }))
+    } catch (err) {
+      setError(err as Error)
+    }
+  }
+
+  const setCaptionColor = async (clip: Clip, colour: string) => {
+    try {
+      patchClip(await api.patchCaptions(clip.id, { caption_color: colour }))
+    } catch (err) {
+      setError(err as Error)
+    }
+  }
+
   const exportClip = async (clip: Clip) => {
     setExporting((current) => new Set(current).add(clip.id))
     setError(null)
     try {
-      await api.exportClip(clip.id, clip.ratio, clip.caption_style)
+      await api.exportClip(clip.id, clip.ratio, clip.caption_style, clip.color_grade)
       patchClip(await api.getClip(clip.id))
     } catch (err) {
       setError(err as Error)
@@ -138,6 +179,12 @@ export function Review() {
 
   const keptCount = clips.filter((clip) => clip.status === 'kept').length
   const activeStyle = styles.find((style) => style.key === selected?.caption_style)
+  // The per-clip text colour overrides the preset primary in the overlay, so the
+  // preview shows exactly what will burn in at export.
+  const previewStyle =
+    activeStyle && selected
+      ? { ...activeStyle, preview: { ...activeStyle.preview, primary: selected.caption_color } }
+      : undefined
 
   if (error && clips.length === 0) {
     return (
@@ -213,9 +260,10 @@ export function Review() {
                   startS={selected.start_s}
                   endS={selected.end_s}
                   words={words}
-                  style={activeStyle}
+                  style={previewStyle}
                   ratio={selected.ratio}
                   cropPath={cropPath}
+                  colorGrade={compareGrade ? 'none' : selected.color_grade}
                 />
                 <TrimBar
                   words={words}
@@ -277,6 +325,40 @@ export function Review() {
                       </button>
                     ))}
                   </div>
+
+                  <div className="mt-4 flex items-center gap-3">
+                    <label className="flex cursor-pointer items-center gap-2.5 text-sm text-ink-200">
+                      <input
+                        type="color"
+                        aria-label="Caption text colour"
+                        value={selected.caption_color}
+                        onChange={(e) => setCaptionColor(selected, e.target.value)}
+                        className="size-8 cursor-pointer rounded-md border border-ink-700 bg-transparent p-0.5"
+                      />
+                      <span>Text colour</span>
+                    </label>
+                    <span className="numeric ml-auto text-xs uppercase text-ink-500">
+                      {selected.caption_color}
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <p className="eyebrow border-b border-ink-800 pb-2">Caption placement</p>
+                  <div className="mt-3 flex gap-2">
+                    {POSITIONS.map(({ key, label }) => (
+                      <button
+                        key={key}
+                        onClick={() => setPosition(selected, key)}
+                        className={[
+                          'btn',
+                          selected.caption_position === key ? 'btn-primary' : 'btn-ghost',
+                        ].join(' ')}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
 
                 <div>
@@ -295,6 +377,52 @@ export function Review() {
                       </button>
                     ))}
                   </div>
+                </div>
+
+                <div>
+                  <p className="eyebrow border-b border-ink-800 pb-2">Color grade</p>
+                  <label className="mt-3 flex items-start gap-3 text-sm text-ink-200">
+                    <input
+                      type="checkbox"
+                      checked={selected.color_grade !== 'none'}
+                      onChange={(e) =>
+                        setColorGrade(
+                          selected,
+                          e.target.checked
+                            ? selected.color_grade === 'none'
+                              ? 'warm'
+                              : selected.color_grade
+                            : 'none',
+                        )
+                      }
+                      className="mt-0.5 size-4 accent-sodium-500"
+                    />
+                    <span>Grade the footage</span>
+                  </label>
+                  {selected.color_grade !== 'none' && (
+                    <>
+                      <select
+                        value={selected.color_grade}
+                        onChange={(e) => setColorGrade(selected, e.target.value)}
+                        className="field mt-2 cursor-pointer text-sm"
+                      >
+                        {GRADES.map(({ key, label }) => (
+                          <option key={key} value={key} className="bg-ink-850">
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                      <label className="mt-2 flex cursor-pointer items-center gap-3 text-sm text-ink-200">
+                        <input
+                          type="checkbox"
+                          checked={compareGrade}
+                          onChange={(e) => setCompareGrade(e.target.checked)}
+                          className="size-4 accent-sodium-500"
+                        />
+                        <span>Compare with original footage</span>
+                      </label>
+                    </>
+                  )}
                 </div>
 
                 <div className="border-t border-ink-800 pt-6">

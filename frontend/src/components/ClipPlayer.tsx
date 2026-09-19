@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { gradeFilter } from '../grades'
 import { formatTimecode, type CaptionStyle, type CropPath, type Word } from '../api'
 
 const VOLUME_KEY = 'autoclip.volume'
@@ -13,6 +14,24 @@ const ASPECTS: Record<string, [number, number]> = {
 
 /** Tallest the preview may be, so the transport row stays on screen. */
 const MAX_HEIGHT_VH = 62
+
+/**
+ * ASS family name → a stack the browser can resolve.
+ *
+ * The metadata carries the name libass is handed, not a CSS family, so without
+ * this every preset but Anton silently inherits the UI font (Archivo) and the
+ * preview shows a typeface the export never uses. Clean Lower is set in Inter,
+ * which is bundled in index.css; the fallback is Inter rather than the UI font
+ * for the same reason.
+ */
+const FONT_STACKS: Record<string, string> = {
+  Anton: 'Anton, Impact, sans-serif',
+  Inter: "'Inter', ui-sans-serif, system-ui, sans-serif",
+}
+
+function captionFont(family: string): string {
+  return FONT_STACKS[family] ?? FONT_STACKS.Inter
+}
 
 function readStoredVolume(): number {
   const stored = Number(window.localStorage.getItem(VOLUME_KEY))
@@ -35,6 +54,7 @@ export function ClipPlayer({
   style,
   ratio,
   cropPath,
+  colorGrade,
 }: {
   src: string
   startS: number
@@ -43,6 +63,7 @@ export function ClipPlayer({
   style: CaptionStyle | undefined
   ratio: string
   cropPath?: CropPath | null
+  colorGrade?: string
 }) {
   const video = useRef<HTMLVideoElement>(null)
   const [playing, setPlaying] = useState(false)
@@ -148,7 +169,7 @@ export function ClipPlayer({
           ref={video}
           src={src}
           className={cropStyle ? 'absolute max-w-none' : 'size-full object-cover'}
-          style={cropStyle ?? undefined}
+          style={{ ...(cropStyle ?? {}), filter: gradeFilter(colorGrade) }}
           onTimeUpdate={onTimeUpdate}
           preload="auto"
           playsInline
@@ -465,17 +486,37 @@ function CaptionOverlay({
   const active = groups.find((group) => time >= group[0].start && time <= group[group.length - 1].end)
   if (!active) return null
 
-  const { primary, accent, allCaps, outlineWidth, boxed, marginRatio, sizeRatio } = style.preview
+  const {
+    primary,
+    accent,
+    allCaps,
+    outlineWidth,
+    boxed,
+    marginRatio,
+    marginHRatio,
+    sizeRatio,
+    position,
+    topMarginRatio,
+  } = style.preview
+
+  const anchor =
+    position === 'top'
+      ? { top: `${topMarginRatio * 100}%` }
+      : position === 'middle'
+        ? { top: '50%', transform: 'translateY(-50%)' }
+        : { bottom: `${marginRatio * 100}%` }
 
   return (
     <div
-      className="pointer-events-none absolute inset-x-0 flex justify-center px-[6%]"
-      style={{ bottom: `${marginRatio * 100}%` }}
+      className="pointer-events-none absolute inset-x-0 flex justify-center"
+      // Side padding mirrors the ASS marginl/marginr: a fraction of frame height,
+      // not width, so the text column stays proportionate across ratios.
+      style={{ ...anchor, paddingInline: `${marginHRatio * 100}%` }}
     >
       <p
         className="text-center leading-[1.15]"
         style={{
-          fontFamily: style.preview.font === 'Anton' ? 'Anton, Impact, sans-serif' : undefined,
+          fontFamily: captionFont(style.preview.font),
           fontSize: `clamp(0.75rem, ${sizeRatio * 100}cqh, 4rem)`,
           fontWeight: boxed || style.preview.font === 'Anton' ? 400 : 600,
           textTransform: allCaps ? 'uppercase' : 'none',

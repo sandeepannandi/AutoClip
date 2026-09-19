@@ -32,6 +32,14 @@ def test_all_six_tables_exist(initialised_db: int) -> None:
     assert {"sources", "jobs", "transcripts", "clips", "clip_edits", "exports"} <= names
 
 
+def test_clip_edits_have_position_column(initialised_db: int) -> None:
+    with db.connection() as conn:
+        rows = conn.execute("PRAGMA table_info(clip_edits)").fetchall()
+    columns = {row["name"] for row in rows}
+
+    assert {"caption_position", "color_grade"} <= columns
+
+
 def test_foreign_keys_are_enforced(initialised_db: int) -> None:
     job = Job(id=new_id(), source_id="does-not-exist")
 
@@ -257,13 +265,48 @@ class TestTranscriptsEditsAndExports:
 
         words = [{"word": "Hello", "start": 0.0, "end": 0.4}]
         store.upsert_clip_edit(
-            ClipEdit(clip_id=clip.id, edited_words=words, caption_style="karaoke_fill")
+            ClipEdit(
+                clip_id=clip.id,
+                edited_words=words,
+                caption_style="karaoke_fill",
+                caption_position="middle",
+            )
         )
 
         loaded = store.get_clip_edit(clip.id)
         assert loaded is not None
         assert loaded.edited_words == words
         assert loaded.caption_style == "karaoke_fill"
+        assert loaded.caption_position == "middle"
+
+    def test_clip_edit_round_trips_colour_grade(self, job: Job) -> None:
+        clip = Clip(id=new_id(), job_id=job.id, start_s=0.0, end_s=30.0)
+        store.replace_clips(job.id, [clip])
+
+        store.upsert_clip_edit(ClipEdit(clip_id=clip.id, color_grade="punchy"))
+
+        loaded = store.get_clip_edit(clip.id)
+        assert loaded is not None
+        assert loaded.color_grade == "punchy"
+
+        # A fresh edit leaves the grade unset (None), so the settings default
+        # still applies to clips that never had a per-clip choice made.
+        store.upsert_clip_edit(ClipEdit(clip_id=clip.id))
+        assert store.get_clip_edit(clip.id).color_grade is None
+
+    def test_clip_edit_upsert_is_a_full_row_replace(self, job: Job) -> None:
+        clip = Clip(id=new_id(), job_id=job.id, start_s=0.0, end_s=30.0)
+        store.replace_clips(job.id, [clip])
+
+        store.upsert_clip_edit(ClipEdit(clip_id=clip.id, caption_position="top"))
+        store.upsert_clip_edit(ClipEdit(clip_id=clip.id, caption_style="boxed"))
+
+        # Upserting overwrites the whole row; the API layer merges partial
+        # PATCHes before writing, so this blast-radius is contained to storage.
+        loaded = store.get_clip_edit(clip.id)
+        assert loaded is not None
+        assert loaded.caption_style == "boxed"
+        assert loaded.caption_position == "bottom"
 
     def test_exports_are_listed_for_a_clip(self, job: Job) -> None:
         clip = Clip(id=new_id(), job_id=job.id, start_s=0.0, end_s=30.0)

@@ -92,6 +92,9 @@ class ExportSettings(BaseModel):
     crf: int = 18
     #: Also write a .srt sidecar next to each exported clip.
     write_srt: bool = False
+    #: Default colour grade applied to exports ("none", "warm", "punchy",
+    #: "cool", "film"). Per-clip choices in the review screen override it.
+    color_grade: str = "none"
 
 
 class Settings(BaseModel):

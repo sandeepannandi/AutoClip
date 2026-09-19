@@ -215,6 +215,7 @@ def doctor() -> None:
     dep_table.add_row("faster-whisper", _status(deps.faster_whisper), "transcription")
     dep_table.add_row("mediapipe", _status(deps.mediapipe), "face detection / reframe")
     dep_table.add_row("scenedetect", _status(deps.scenedetect), "shot boundaries")
+    dep_table.add_row("yt-dlp", _status(deps.ytdlp), "YouTube ingestion")
     dep_table.add_row(
         "whisperx",
         _status(deps.whisperx, warn_only=True),
@@ -232,6 +233,7 @@ def doctor() -> None:
         (not deps.faster_whisper, "faster-whisper"),
         (not deps.mediapipe, "mediapipe"),
         (not deps.scenedetect, "scenedetect"),
+        (not deps.ytdlp, "yt-dlp"),
     ):
         if missing:
             remediation.append(
@@ -602,15 +604,60 @@ def fetch_models() -> None:
         console.print(f"[green]OK[/green] {path}")
 
 
-@app.command("update-ytdlp")
-def update_ytdlp() -> None:
-    """Update yt-dlp, which YouTube changes force often."""
+def _ytdlp_upgrade_command() -> list[str] | None:
+    """Build the command to upgrade yt-dlp, or ``None`` if no installer works.
+
+    The project's virtual environments are created with ``uv``, whose venvs do
+    not install pip by default, so ``python -m pip`` can fail with
+    "No module named pip". This tries, in order:
+
+    1. ``uv pip install`` — preferred when uv is on PATH.
+    2. ``python -m pip install`` — works when pip is present.
+    3. Bootstrap pip with ``ensurepip``, then use pip — last resort.
+    """
+    import shutil
     import subprocess
     import sys
 
+    if shutil.which("uv"):
+        return ["uv", "pip", "install", "--upgrade", "yt-dlp"]
+
+    if system._module_available("pip"):
+        return [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"]
+
+    # pip is missing — try to bootstrap it with ensurepip.
+    subprocess.run(
+        [sys.executable, "-m", "ensurepip", "--upgrade"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if system._module_available("pip"):
+        return [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"]
+
+    return None
+
+
+@app.command("update-ytdlp")
+def update_ytdlp() -> None:
+    """Update yt-dlp, which YouTube changes force often."""
+    import importlib.metadata
+    import subprocess
+
     console.print("[cyan]Updating yt-dlp...[/cyan]")
+
+    cmd = _ytdlp_upgrade_command()
+    if cmd is None:
+        console.print(
+            "[red]Update failed.[/red] No package manager (uv or pip) is "
+            "available in this environment.\n"
+            "Install one and try again, or run manually:\n"
+            "  [cyan]uv pip install --upgrade yt-dlp[/cyan]"
+        )
+        raise typer.Exit(1)
+
     result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"],
+        cmd,
         capture_output=True,
         text=True,
         check=False,
@@ -618,8 +665,6 @@ def update_ytdlp() -> None:
     if result.returncode != 0:
         console.print(f"[red]Update failed.[/red]\n{result.stderr}")
         raise typer.Exit(1)
-
-    import importlib.metadata
 
     try:
         version_installed = importlib.metadata.version("yt-dlp")

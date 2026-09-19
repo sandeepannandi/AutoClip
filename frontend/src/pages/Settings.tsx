@@ -229,6 +229,14 @@ export function Settings() {
             onChange={(value) => patch({ export: { ...settings.export, ratio: value } })}
             options={['9:16', '1:1', '16:9']}
           />
+          <Select
+            label="Default color grade"
+            hint="Applied to exports; per-clip choices in the review screen override it."
+            value={settings.export.color_grade}
+            onChange={(value) => patch({ export: { ...settings.export, color_grade: value } })}
+            options={['none', 'warm', 'punchy', 'cool', 'film']}
+            labels={{ none: 'None', warm: 'Warm', punchy: 'Punchy', cool: 'Cool', film: 'Film' }}
+          />
           <NumberField
             label="Loudness target (LUFS)"
             value={settings.export.loudness_lufs}

@@ -156,6 +156,7 @@ class OptionalDeps:
     scenedetect: bool = False
     whisperx: bool = False
     faster_whisper: bool = False
+    ytdlp: bool = False
     keyring_backend: bool = False
     ollama_running: bool = False
     ollama_models: list[str] = field(default_factory=list)
@@ -328,6 +329,7 @@ def probe_optional_deps() -> OptionalDeps:
         ("scenedetect", "scenedetect"),
         ("whisperx", "whisperx"),
         ("faster_whisper", "faster_whisper"),
+        ("ytdlp", "yt_dlp"),
     ):
         setattr(deps, attr, _module_available(module))
 

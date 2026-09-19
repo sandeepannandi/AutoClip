@@ -321,6 +321,58 @@ class TestClips:
 
         assert response.status_code == 400
 
+    def test_color_grade_defaults_to_none(self, client: TestClient, job_with_clips: Job) -> None:
+        clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
+
+        assert client.get(f"/api/clips/{clip_id}").json()["color_grade"] == "none"
+
+    def test_color_grade_is_persisted(self, client: TestClient, job_with_clips: Job) -> None:
+        clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
+
+        response = client.patch(f"/api/clips/{clip_id}/captions", json={"color_grade": "film"})
+
+        assert response.status_code == 200
+        assert response.json()["color_grade"] == "film"
+        assert client.get(f"/api/clips/{clip_id}").json()["color_grade"] == "film"
+
+    def test_unknown_color_grade_is_rejected(self, client: TestClient, job_with_clips: Job) -> None:
+        clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
+
+        response = client.patch(
+            f"/api/clips/{clip_id}/captions", json={"color_grade": "sepia-extreme"}
+        )
+
+        assert response.status_code == 400
+
+    def test_caption_color_defaults_to_preset_primary(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
+
+        clip = client.get(f"/api/clips/{clip_id}").json()
+
+        # bold_pop's preset primary is white, normalised to the API's lowercase hex.
+        assert clip["caption_color"] == "#ffffff"
+
+    def test_caption_color_is_persisted(self, client: TestClient, job_with_clips: Job) -> None:
+        clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
+
+        response = client.patch(f"/api/clips/{clip_id}/captions", json={"caption_color": "#FFE500"})
+
+        assert response.status_code == 200
+        assert response.json()["caption_color"] == "#ffe500"
+        assert client.get(f"/api/clips/{clip_id}").json()["caption_color"] == "#ffe500"
+
+    @pytest.mark.parametrize("bad", ["FFE500", "#FFF", "#GGGGGG", "#ffe50", "#ffe5000"])
+    def test_invalid_caption_color_is_rejected(
+        self, client: TestClient, job_with_clips: Job, bad: str
+    ) -> None:
+        clip_id = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()[0]["id"]
+
+        response = client.patch(f"/api/clips/{clip_id}/captions", json={"caption_color": bad})
+
+        assert response.status_code == 400
+
     def test_missing_clip_is_404(self, client: TestClient) -> None:
         assert client.get("/api/clips/nope").status_code == 404
         assert client.patch("/api/clips/nope", json={"title": "x"}).status_code == 404

@@ -2,7 +2,8 @@
 
 Word grouping decides readability; ASS styling decides whether it looks like a
 real short or like a subtitle track. Four presets cover the range from
-attention-grabbing to professional.
+attention-grabbing to professional, with an optional caption position baked into
+every render.
 
 Per-word animation (Bold Pop, Boxed) is done by emitting one Dialogue event per
 word, each showing the whole caption group with the active word overridden.
@@ -17,7 +18,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pysubs2
+from pysubs2 import Alignment
 
+from ..db.models import CaptionPosition
 from .transcript import Word
 
 log = logging.getLogger(__name__)
@@ -84,6 +87,13 @@ class CaptionStyle:
     all_caps: bool = True
     #: Distance from the bottom of the frame, as a fraction of height.
     margin_v_ratio: float = 0.24
+    #: Side margins from the left/right frame edges, as a fraction of height
+    #: (the font is sized from height too, so the text column stays proportionate).
+    margin_h_ratio: float = 0.03
+    #: Vertical placement of the caption block: "bottom", "middle", or "top".
+    position: CaptionPosition = "bottom"
+    #: Distance from the top of the frame when :attr:`position` is "top".
+    top_margin_ratio: float = 0.10
     max_words: int = DEFAULT_MAX_WORDS
     #: "none" | "scale" | "karaoke"
     animation: str = "scale"
@@ -93,6 +103,10 @@ class CaptionStyle:
     boxed: bool = False
     box_colour: str = "#000000"
     box_alpha: int = 40
+    #: Slide-up entrance that plays the first time a caption group appears.
+    entrance: bool = False
+    #: Duration of the entrance animation, in milliseconds.
+    entrance_ms: int = 180
 
     @property
     def font_path(self) -> Path:
@@ -114,6 +128,7 @@ PRESETS: dict[str, CaptionStyle] = {
         animation="scale",
         scale_percent=118,
         max_words=4,
+        entrance=True,
     ),
     "karaoke_fill": CaptionStyle(
         key="karaoke_fill",
@@ -133,16 +148,22 @@ PRESETS: dict[str, CaptionStyle] = {
         key="clean_lower",
         label="Clean Lower",
         description="Minimal lower third, no animation. For talks and professional cuts.",
+        # Inter, always. Anton at this weight reads as a shout, which is the
+        # opposite of what this preset is for.
         font="Inter",
         font_file="Inter-Variable.ttf",
-        size_ratio=0.034,
+        size_ratio=0.043,
         primary="#FFFFFF",
         accent=None,
-        outline_width=2.0,
-        shadow=1.0,
+        # Deliberately light: a hairline outline and a barely-there drop shadow,
+        # so the text sits on the footage instead of stamping on it.
+        outline_width=1.4,
+        shadow=0.5,
         bold=False,
         all_caps=False,
-        margin_v_ratio=0.10,
+        margin_v_ratio=0.22,
+        # Long lower-third lines wrap early rather than hugging the edges.
+        margin_h_ratio=0.038,
         animation="none",
         max_words=8,
     ),
@@ -163,6 +184,7 @@ PRESETS: dict[str, CaptionStyle] = {
         boxed=True,
         box_colour="#000000",
         box_alpha=30,
+        entrance=True,
     ),
 }
 
@@ -248,11 +270,16 @@ def build_ass(
     width: int,
     height: int,
     time_offset_s: float = 0.0,
+    position: CaptionPosition | None = None,
+    primary_override: str | None = None,
 ) -> pysubs2.SSAFile:
     """Build an ASS subtitle file for a clip.
 
     ``time_offset_s`` is subtracted from every timestamp, so absolute transcript
-    times become clip-relative ones.
+    times become clip-relative ones. ``position`` overrides the preset's caption
+    placement. ``primary_override`` replaces the preset's primary colour
+    (``#RRGGBB``) in the emitted style line without touching the frozen preset;
+    secondary/accent remain preset-controlled.
 
     Preconditions:
         words are in chronological order and carry start/end timings.
@@ -263,8 +290,15 @@ def build_ass(
     subs.info["ScaledBorderAndShadow"] = "yes"
     subs.info["WrapStyle"] = "0"
 
+    resolved_position = position or style.position
     scale = height / REFERENCE_HEIGHT
-    subs.styles[STYLE_NAME] = _build_ass_style(style, height=height, scale=scale)
+    subs.styles[STYLE_NAME] = _build_ass_style(
+        style,
+        height=height,
+        scale=scale,
+        position=resolved_position,
+        primary_override=primary_override,
+    )
 
     groups = group_words(words, max_words=style.max_words)
 
@@ -272,18 +306,31 @@ def build_ass(
         if style.animation == "karaoke":
             subs.events.append(_karaoke_event(group, style, time_offset_s))
         elif style.animation == "scale" and style.accent:
-            subs.events.extend(_per_word_events(group, style, time_offset_s))
+            subs.events.extend(
+                _per_word_events(group, style, time_offset_s, width=width, height=height)
+            )
         else:
-            subs.events.append(_static_event(group, style, time_offset_s))
+            subs.events.append(
+                _static_event(group, style, time_offset_s, width=width, height=height)
+            )
+
+    _no_overlapping_lines(subs.events)
 
     return subs
 
 
-def _build_ass_style(style: CaptionStyle, *, height: int, scale: float) -> pysubs2.SSAStyle:
+def _build_ass_style(
+    style: CaptionStyle,
+    *,
+    height: int,
+    scale: float,
+    position: CaptionPosition,
+    primary_override: str | None = None,
+) -> pysubs2.SSAStyle:
     ass_style = pysubs2.SSAStyle()
     ass_style.fontname = style.font
     ass_style.fontsize = round(height * style.size_ratio)
-    ass_style.primarycolor = hex_to_ass(style.primary)
+    ass_style.primarycolor = hex_to_ass(primary_override or style.primary)
     ass_style.secondarycolor = hex_to_ass(style.accent or style.primary)
     ass_style.outlinecolor = hex_to_ass(style.outline)
     ass_style.backcolor = hex_to_ass(style.box_colour, alpha=style.box_alpha)
@@ -292,10 +339,45 @@ def _build_ass_style(style: CaptionStyle, *, height: int, scale: float) -> pysub
     ass_style.shadow = style.shadow * scale
     # BorderStyle 3 draws an opaque box using backcolor instead of an outline.
     ass_style.borderstyle = 3 if style.boxed else 1
-    ass_style.alignment = pysubs2.Alignment.BOTTOM_CENTER
-    ass_style.marginv = round(height * style.margin_v_ratio)
-    ass_style.marginl = ass_style.marginr = round(height * 0.03)
+    ass_style.alignment = {
+        "bottom": Alignment.BOTTOM_CENTER,
+        "middle": Alignment.MIDDLE_CENTER,
+        "top": Alignment.TOP_CENTER,
+    }[position]
+    if position == "top":
+        ass_style.marginv = round(height * style.top_margin_ratio)
+    elif position == "middle":
+        ass_style.marginv = 0
+    else:
+        ass_style.marginv = round(height * style.margin_v_ratio)
+    ass_style.marginl = ass_style.marginr = round(height * style.margin_h_ratio)
     return ass_style
+
+
+def _entrance_tags(style: CaptionStyle, *, width: int, height: int) -> str:
+    r"""Inline tags that slide a caption up from its resting position.
+
+    Uses absolute coordinates for the alignment anchor (\an2/\an5/\an8) so the
+    motion is identical across players — relative ``\move`` offsets are
+    ambiguous in libass.
+    """
+    if not style.entrance:
+        return ""
+
+    anchor_x = width / 2
+    if style.position == "top":
+        anchor_y = height * style.top_margin_ratio
+    elif style.position == "middle":
+        anchor_y = height / 2
+    else:
+        anchor_y = height - height * style.margin_v_ratio
+
+    start_y = anchor_y + max(1, round(height * style.size_ratio))
+    duration_cs = max(1, round(style.entrance_ms / 10))
+    return (
+        f"{{\\fad({style.entrance_ms},0)\\move("
+        f"{anchor_x:.0f},{start_y:.0f},{anchor_x:.0f},{anchor_y:.0f},0,{duration_cs})}}"
+    )
 
 
 def _text_of(word: Word, style: CaptionStyle) -> str:
@@ -303,18 +385,47 @@ def _text_of(word: Word, style: CaptionStyle) -> str:
     return text.upper() if style.all_caps else text
 
 
-def _event(start_s: float, end_s: float, text: str, offset: float) -> pysubs2.SSAEvent:
+def _event(
+    start_s: float, end_s: float, text: str, offset: float, style: str = STYLE_NAME
+) -> pysubs2.SSAEvent:
     return pysubs2.SSAEvent(
         start=pysubs2.make_time(s=max(0.0, start_s - offset)),
         end=pysubs2.make_time(s=max(0.0, end_s - offset)),
         text=text,
-        style=STYLE_NAME,
+        style=style,
     )
 
 
-def _static_event(group: CaptionGroup, style: CaptionStyle, offset: float) -> pysubs2.SSAEvent:
+def _no_overlapping_lines(events: list[pysubs2.SSAEvent]) -> None:
+    """Clamp event starts so only one caption line is ever on screen.
+
+    Group boundaries can step on each other when a sentence break or the
+    word-count ceiling lands mid-overlap — two people speaking at once, or a
+    short word nested inside a longer one — so group N's end comes after group
+    N+1's start. libass then treats both Dialogue events as active and stacks
+    two lines. Each event here starts no earlier than the previous one ended;
+    a group that would have collided simply waits, so the newest line always
+    lands after the current one clears. Within a group the per-word events
+    already chain this way; this pass extends that across groups.
+    """
+    last_end = 0
+    for event in events:
+        event.start = max(event.start, last_end)
+        event.end = max(event.start, event.end)
+        last_end = event.end
+
+
+def _static_event(
+    group: CaptionGroup,
+    style: CaptionStyle,
+    offset: float,
+    *,
+    width: int,
+    height: int,
+) -> pysubs2.SSAEvent:
     text = " ".join(_text_of(w, style) for w in group.words)
-    return _event(group.start, group.end, text, offset)
+    entrance = _entrance_tags(style, width=width, height=height)
+    return _event(group.start, group.end, f"{entrance}{text}", offset)
 
 
 def _karaoke_event(group: CaptionGroup, style: CaptionStyle, offset: float) -> pysubs2.SSAEvent:
@@ -338,15 +449,22 @@ def _karaoke_event(group: CaptionGroup, style: CaptionStyle, offset: float) -> p
 
 
 def _per_word_events(
-    group: CaptionGroup, style: CaptionStyle, offset: float
+    group: CaptionGroup,
+    style: CaptionStyle,
+    offset: float,
+    *,
+    width: int,
+    height: int,
 ) -> list[pysubs2.SSAEvent]:
     """Emit one event per word, highlighting the active one.
 
     Every event renders the full group so the line stays stable on screen; only
-    the emphasised word changes between them.
+    the emphasised word changes between them. The first event carries the
+    entrance animation for the whole caption group.
     """
     accent_tag = f"\\c{ass_colour_override(style.accent or style.primary)}"
     scale = style.scale_percent
+    entrance = _entrance_tags(style, width=width, height=height)
     events: list[pysubs2.SSAEvent] = []
 
     for active, word in enumerate(group.words):
@@ -362,7 +480,10 @@ def _per_word_events(
         # out early when a word's measured end precedes the next word's start.
         end = word.end if active + 1 < len(group.words) else group.end
         next_start = group.words[active + 1].start if active + 1 < len(group.words) else end
-        events.append(_event(word.start, max(end, next_start), " ".join(rendered), offset))
+        line = " ".join(rendered)
+        if active == 0:
+            line = f"{entrance}{line}"
+        events.append(_event(word.start, max(end, next_start), line, offset))
 
     return events
 
@@ -375,9 +496,19 @@ def write_ass(
     width: int,
     height: int,
     time_offset_s: float = 0.0,
+    position: CaptionPosition | None = None,
+    primary_override: str | None = None,
 ) -> Path:
     """Render captions to an .ass file and return its path."""
-    subs = build_ass(words, style, width=width, height=height, time_offset_s=time_offset_s)
+    subs = build_ass(
+        words,
+        style,
+        width=width,
+        height=height,
+        time_offset_s=time_offset_s,
+        position=position,
+        primary_override=primary_override,
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     subs.save(str(path), encoding="utf-8")
     return path
@@ -386,14 +517,17 @@ def write_ass(
 def write_srt(path: Path, words: list[Word], *, time_offset_s: float = 0.0) -> Path:
     """Write a plain .srt sidecar — for platforms that want an upload-time file."""
     subs = pysubs2.SSAFile()
+    events: list[pysubs2.SSAEvent] = []
     for group in group_words(words, max_words=8):
-        subs.events.append(
+        events.append(
             pysubs2.SSAEvent(
                 start=pysubs2.make_time(s=max(0.0, group.start - time_offset_s)),
                 end=pysubs2.make_time(s=max(0.0, group.end - time_offset_s)),
                 text=group.text,
             )
         )
+    _no_overlapping_lines(events)
+    subs.events = events
     path.parent.mkdir(parents=True, exist_ok=True)
     subs.save(str(path), encoding="utf-8", format_="srt")
     return path

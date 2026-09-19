@@ -7,7 +7,9 @@ Pipeline for one clip:
 3. Link observations into per-person tracks.
 4. Map diarized speakers onto tracks once, then let turn boundaries drive framing.
 5. Per shot, pick a strategy — TRACK, WIDE, or GENERAL.
-6. Build a raw crop path, smooth it, and emit segments.
+6. Build a raw crop path, drive it through the lazy-follow (a hysteresis
+   dead-band that parks the camera while the speaker stays in frame centre
+   and only chases — slowly — when they genuinely leave), and emit segments.
 
 The quality bar is "never jarring": no visible jitter, no cut-off faces, the
 speaker on screen for essentially all of their speaking time. Every default here
@@ -33,7 +35,7 @@ from .croppath import (
 )
 from .faces import FaceDetectionUnavailable, FaceObservation, sample_faces
 from .scenes import Shot, detect_shots
-from .smoothing import SmoothingConfig, smooth_series
+from .smoothing import SmoothingConfig, lazy_follow
 from .speaker import assign_speakers, map_tracks_to_speakers
 from .tracker import FaceTrack, build_tracks
 
@@ -306,9 +308,19 @@ def _track_segment(
         keyframes = [CropKeyframe(t=start_s, x=x, y=y)]
     else:
         smoothing = config.smoothing or SmoothingConfig()
-        xs = smooth_series([(t, x) for t, x, _ in raw], smoothing)
-        ys = smooth_series([(t, y) for t, _, y in raw], smoothing)
-        keyframes = [CropKeyframe(t=t, x=x, y=y) for (t, x), (_, y) in zip(xs, ys, strict=True)]
+        # Lazy follow: the crop parks while the subject stays inside its band,
+        # so pacing around a centre won't re-frame every step. The band scales
+        # with the crop's tight dimension.
+        xs = lazy_follow([(t, x) for t, x, _ in raw], smoothing, reference_px=crop_w)
+        ys = lazy_follow([(t, y) for t, _, y in raw], smoothing, reference_px=crop_w)
+        keyframes = [
+            CropKeyframe(
+                t=t,
+                x=_clamp(x, 0.0, float(source_w - crop_w)),
+                y=_clamp(y, 0.0, float(source_h - crop_h)),
+            )
+            for (t, x), (_, y) in zip(xs, ys, strict=True)
+        ]
         # Anchor the ends so the expression covers the whole segment.
         if keyframes[0].t > start_s:
             keyframes.insert(0, CropKeyframe(start_s, keyframes[0].x, keyframes[0].y))

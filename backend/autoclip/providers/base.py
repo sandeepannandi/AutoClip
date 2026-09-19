@@ -61,16 +61,24 @@ class ClipCandidate(BaseModel):
     hook: str = ""
     score: int = Field(default=50, ge=0, le=100)
     reason: str = ""
+    #: The model's read on how hard the opening line grabs a stranger.
+    hook_strength: int = Field(default=50, ge=0, le=100)
+    #: The words the model thinks deserve visual emphasis in the captions.
+    emphasis_words: list[str] = Field(default_factory=list)
+    #: The caption preset it believes matches the clip's energy.
+    best_style: str = "bold_pop"
+    #: A platform-ready caption/title for posting, distinct from the folder slug.
+    posting_title: str = ""
 
-    @field_validator("title", "hook", "reason", mode="before")
+    @field_validator("title", "hook", "reason", "best_style", "posting_title", mode="before")
     @classmethod
     def _coerce_to_string(cls, value: Any) -> str:
         # Models occasionally return null or a number where text was asked for.
         return "" if value is None else str(value)
 
-    @field_validator("score", mode="before")
+    @field_validator("score", "hook_strength", mode="before")
     @classmethod
-    def _coerce_score(cls, value: Any) -> int:
+    def _coerce_percent(cls, value: Any) -> int:
         """Accept floats and 0-1 fractions, which models emit despite the schema."""
         if value is None:
             return 50
@@ -81,6 +89,16 @@ class ClipCandidate(BaseModel):
         if 0.0 < number <= 1.0:
             number *= 100
         return max(0, min(100, round(number)))
+
+    @field_validator("emphasis_words", mode="before")
+    @classmethod
+    def _coerce_words(cls, value: Any) -> list[str]:
+        # A model may return a single quoted phrase instead of a list.
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return [str(item) for item in value]
 
 
 class ClipCandidates(BaseModel):

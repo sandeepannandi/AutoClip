@@ -370,6 +370,7 @@ class PipelineRunner:
             destination = destination_dir / export.output_filename(
                 clip.title or f"clip-{clip.rank}", ratio
             )
+            edit = store.get_clip_edit(clip.id)
 
             request = export.ExportRequest(
                 source=source_path,
@@ -380,6 +381,11 @@ class PipelineRunner:
                 words=words,
                 style=style,
                 ratio=ratio,
+                caption_position=edit.caption_position if edit else None,
+                color_grade=(
+                    (edit.color_grade if edit else None) or self.settings.export.color_grade
+                ),
+                primary_color=edit.caption_color if edit else None,
             )
 
             def clip_progress(fraction: float, i: int = index) -> None:

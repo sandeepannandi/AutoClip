@@ -11,6 +11,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pytest
 from autoclip.config import ExportSettings
 from autoclip.pipeline import captions, export, ffmpeg
@@ -389,6 +390,101 @@ class TestPathsWithSpecialCharacters:
         assert ffmpeg.probe(destination).width == 1080
 
 
+@pytest.mark.parametrize("grade", ["warm", "punchy", "cool", "film"])
+class TestColorGrading:
+    """Each grade must clearly shift pixels versus an ungraded clip.
+
+    A grade that parses but barely does anything — a typo in a filter
+    expression, an option the local ffmpeg ignores, or an over-timid preset —
+    would pass a hash-equality check and ship clips indistinguishable from
+    ungraded ones. The mean-abs threshold instead requires a perceptible move.
+    """
+
+    #: Floor on the mean abs RGB shift (0..255) below which a grade doesn't
+    #: visibly read on screen. The presets sit at ~2-8, well above it.
+    MIN_MEAN_DELTA = 2.0
+
+    def test_grade_visibly_changes_the_output(
+        self, source_video, words, tmp_path, grade: str
+    ) -> None:
+        plain = tmp_path / "plain.mp4"
+        graded = tmp_path / f"grade_{grade}.mp4"
+
+        export.export_clip(
+            make_request(source_video, plain, centre_crop(SOURCE_W, SOURCE_H, 5.0), words),
+            work_dir=tmp_path / "work",
+        )
+        export.export_clip(
+            make_request(
+                source_video,
+                graded,
+                centre_crop(SOURCE_W, SOURCE_H, 5.0),
+                words,
+                color_grade=grade,
+            ),
+            work_dir=tmp_path / "work",
+        )
+
+        delta = _mean_abs_delta(graded, plain, timestamps=(1.0, 2.5, 4.0))
+        assert delta >= self.MIN_MEAN_DELTA
+
+
+class TestCaptionColourOverride:
+    """The per-clip primary colour must reach the ASS the renderer burns in."""
+
+    def test_override_surfaces_in_the_captions_ass(self, source_video, words, tmp_path) -> None:
+        destination = tmp_path / "out.mp4"
+        request = make_request(
+            source_video,
+            destination,
+            centre_crop(SOURCE_W, SOURCE_H, 5.0),
+            words,
+            primary_color="#FFE500",
+            style=captions.get_style("clean_lower"),
+        )
+
+        export.export_clip(request, work_dir=tmp_path / "work")
+
+        assert destination.exists()
+        ass_path = tmp_path / "work" / destination.stem / "captions.ass"
+        assert ass_path.exists()
+        style_line = next(
+            line
+            for line in ass_path.read_text(encoding="utf-8").splitlines()
+            if line.startswith(f"Style: {captions.STYLE_NAME},")
+        )
+        assert _ass_colour(255, 229, 0) in style_line
+
+    def test_preset_primary_is_written_when_no_override(
+        self, source_video, words, tmp_path
+    ) -> None:
+        destination = tmp_path / "out.mp4"
+        export.export_clip(
+            make_request(
+                source_video,
+                destination,
+                centre_crop(SOURCE_W, SOURCE_H, 5.0),
+                words,
+                style=captions.get_style("clean_lower"),
+            ),
+            work_dir=tmp_path / "work",
+        )
+
+        assert destination.exists()
+        ass_path = tmp_path / "work" / destination.stem / "captions.ass"
+        style_line = next(
+            line
+            for line in ass_path.read_text(encoding="utf-8").splitlines()
+            if line.startswith(f"Style: {captions.STYLE_NAME},")
+        )
+        assert _ass_colour(255, 255, 255) in style_line
+
+
+def _ass_colour(r: int, g: int, b: int, alpha: int = 0) -> str:
+    """Format RGB as the ASS style-field colour, ``&HAABBGGRR``."""
+    return f"&H{alpha:02X}{b:02X}{g:02X}{r:02X}"
+
+
 def _frame_signature(video: Path, timestamp: float) -> str:
     """Hash one frame's pixels, for comparing rendered output."""
     result = subprocess.run(
@@ -414,3 +510,57 @@ def _frame_signature(video: Path, timestamp: float) -> str:
         check=True,
     )
     return result.stdout.strip()
+
+
+def _frame_rgb(video: Path, timestamp: float) -> np.ndarray:
+    """Decode one frame as a ``(h, w, 3)`` uint8 RGB array."""
+    probe = ffmpeg.probe(video)
+    width, height = int(probe.width), int(probe.height)
+    result = subprocess.run(
+        [
+            ffmpeg.ffmpeg_path(),
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-ss",
+            str(timestamp),
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-",
+        ],
+        capture_output=True,
+        check=True,
+    )
+    pixels = np.frombuffer(result.stdout, dtype=np.uint8)
+    expected = width * height * 3
+    if pixels.size != expected:
+        raise AssertionError(
+            f"decoded {pixels.size} bytes for {video}@t={timestamp}, wanted {expected}"
+        )
+    return pixels.reshape(height, width, 3)
+
+
+def _mean_abs_delta(
+    left: Path, right: Path, timestamps: tuple[float, ...] = (1.0, 2.5, 4.0)
+) -> float:
+    """Mean per-pixel abs RGB difference between two renders, over sample frames.
+
+    Frame-correlated content (subtitles, the scene itself) is identical in both
+    videos and cancels out; only the grade's own effect is measured.
+    """
+    if not timestamps:
+        raise AssertionError("need at least one timestamp to compare")
+    total = 0.0
+    for timestamp in timestamps:
+        a = _frame_rgb(left, timestamp)
+        b = _frame_rgb(right, timestamp)
+        if a.shape != b.shape:
+            raise AssertionError(f"dimension mismatch at t={timestamp}: {a.shape} vs {b.shape}")
+        total += float(np.abs(a.astype(np.int16) - b.astype(np.int16)).mean())
+    return total / len(timestamps)

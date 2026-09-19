@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -30,13 +31,26 @@ from .schemas import (
 
 log = logging.getLogger(__name__)
 
+_COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
 router = APIRouter(prefix="/api", tags=["clips"])
 
 
 def _clip_out(clip) -> ClipOut:
     edit = store.get_clip_edit(clip.id)
     exports = store.list_exports(clip.id)
-    return ClipOut.of(clip, edit=edit, exports=exports)
+    style_key = edit.caption_style if edit else "bold_pop"
+    return ClipOut.of(
+        clip,
+        edit=edit,
+        exports=exports,
+        default_color_grade=load_settings().export.color_grade,
+        caption_color=(
+            edit.caption_color
+            if edit is not None and edit.caption_color is not None
+            else captions_module.get_style(style_key).primary.lower()
+        ),
+    )
 
 
 async def list_clips_for_job(job_id: str) -> list[ClipOut]:
@@ -150,6 +164,19 @@ async def patch_captions(clip_id: str, payload: CaptionPatchIn) -> ClipOut:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if payload.color_grade is not None:
+        try:
+            export_module.grade_filters(payload.color_grade)
+        except export_module.ExportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    payload_colour = payload.caption_color
+    if payload_colour is not None and not _COLOUR_RE.match(payload_colour):
+        raise HTTPException(
+            status_code=400,
+            detail="Caption colour must be a hex string like #FFE500.",
+        )
+
     existing = await asyncio.to_thread(store.get_clip_edit, clip_id)
     from ..db.models import ClipEdit
 
@@ -162,6 +189,21 @@ async def patch_captions(clip_id: str, payload: CaptionPatchIn) -> ClipOut:
         ),
         caption_style=payload.caption_style or (existing.caption_style if existing else "bold_pop"),
         ratio=payload.ratio or (existing.ratio if existing else "9:16"),
+        caption_position=(
+            payload.caption_position
+            if payload.caption_position is not None
+            else (existing.caption_position if existing else "bottom")
+        ),
+        color_grade=(
+            payload.color_grade
+            if payload.color_grade is not None
+            else (existing.color_grade if existing else None)
+        ),
+        caption_color=(
+            payload.caption_color.lower()
+            if payload.caption_color is not None
+            else (existing.caption_color if existing else None)
+        ),
     )
     await asyncio.to_thread(store.upsert_clip_edit, edit)
 
@@ -185,6 +227,13 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if payload.color_grade is not None:
+        try:
+            export_module.grade_filters(payload.color_grade)
+        except export_module.ExportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    edit = await asyncio.to_thread(store.get_clip_edit, clip_id)
     words = [
         Word(text=w.text, start=w.start, end=w.end, speaker=w.speaker)
         for w in await clip_words(clip_id)
@@ -211,6 +260,9 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         words=words,
         style=style,
         ratio=payload.ratio,
+        caption_position=edit.caption_position if edit else None,
+        color_grade=payload.color_grade or settings.export.color_grade,
+        primary_color=edit.caption_color if edit else None,
     )
 
     try:
@@ -285,6 +337,10 @@ async def caption_styles() -> list[CaptionStyleOut]:
                 "allCaps": style.all_caps,
                 "sizeRatio": style.size_ratio,
                 "marginRatio": style.margin_v_ratio,
+                "marginHRatio": style.margin_h_ratio,
+                "position": style.position,
+                "topMarginRatio": style.top_margin_ratio,
+                "entrance": style.entrance,
                 "boxed": style.boxed,
                 "animation": style.animation,
                 "maxWords": style.max_words,

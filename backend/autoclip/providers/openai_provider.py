@@ -16,6 +16,12 @@ log = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gpt-4o"
 
+#: Explicit output-token budget for a window's JSON response. Without it,
+#: endpoints apply a low default cap (often 4096), and a response truncated
+#: mid-JSON fails the endpoint's own JSON-mode validation — the
+#: "max completion tokens reached before generating a valid document" error.
+MAX_OUTPUT_TOKENS = 8192
+
 SUGGESTED_MODELS = [
     "gpt-4o",
     "gpt-4o-mini",
@@ -71,26 +77,44 @@ class OpenAIProvider(LLMProvider):
         request = {
             "model": self.model,
             "temperature": config.temperature,
+            "max_tokens": MAX_OUTPUT_TOKENS,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
-        # Only OpenAI's own endpoint reliably honours this; other vendors 400 on
-        # it, so a failed request is retried once without it.
+        # response_format is only reliably honoured by OpenAI's own endpoint:
+        # other vendors 400 on it, and some models fail their own JSON-mode
+        # validation outright ("json_validate_failed"). A plain request works
+        # everywhere — the shared detection loop already extracts and repairs
+        # JSON from freeform responses.
         try:
-            response = await client.chat.completions.create(
-                **request, response_format={"type": "json_object"}
-            )
-        except Exception as exc:
-            if _is_unsupported_parameter(exc):
-                log.debug("Endpoint rejected response_format; retrying without it.")
+            return await self._send(client, request, json_mode=True)
+        except ProviderError as exc:
+            if _is_rejected_parameter(exc):
+                log.debug("Endpoint rejected a request parameter; retrying plainly.")
+                plain = {k: v for k, v in request.items() if k != "max_tokens"}
+                return await self._send(client, plain, json_mode=False)
+            # An output-cap failure is request-side: no retry shape fixes it.
+            if _is_output_token_cap(exc):
+                raise
+            if _is_json_mode_failure(exc):
+                log.debug("JSON mode failed validation; retrying without response_format.")
                 try:
-                    response = await client.chat.completions.create(**request)
-                except Exception as retry_exc:
-                    raise _translate(retry_exc, self.name, self.model) from retry_exc
-            else:
-                raise _translate(exc, self.name, self.model) from exc
+                    return await self._send(client, request, json_mode=False)
+                except ProviderError:
+                    raise exc from None  # report the original, more specific failure
+            raise
+
+    async def _send(self, client, request: dict, *, json_mode: bool) -> str:
+        """Make one chat completion call, translating errors to ProviderError."""
+        kwargs = dict(request)
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        try:
+            response = await client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            raise _translate(exc, self.name, self.model) from exc
 
         choices = response.choices or []
         if not choices:
@@ -116,9 +140,30 @@ class OpenAIProvider(LLMProvider):
         )
 
 
-def _is_unsupported_parameter(exc: Exception) -> bool:
+def _is_rejected_parameter(exc: Exception) -> bool:
+    """The endpoint refused part of the request itself (parameter unsupported)."""
     lowered = str(exc).lower()
-    return "response_format" in lowered or "unsupported" in lowered or "unrecognized" in lowered
+    return (
+        "max_tokens" in lowered
+        or "response_format" in lowered
+        or "unsupported" in lowered
+        or "unrecognized" in lowered
+    )
+
+
+def _is_json_mode_failure(exc: Exception) -> bool:
+    """The request was accepted, but the endpoint's JSON mode failed."""
+    lowered = str(exc).lower()
+    return (
+        "json_validate_failed" in lowered
+        or "failed to generate json" in lowered
+        or "failed to validate json" in lowered
+    )
+
+
+def _is_output_token_cap(exc: Exception) -> bool:
+    lowered = str(exc).lower()
+    return "max completion tokens" in lowered or "max output tokens" in lowered
 
 
 def _translate(exc: Exception, provider: str, model: str) -> ProviderError:
@@ -151,5 +196,14 @@ def _translate(exc: Exception, provider: str, model: str) -> ProviderError:
         )
     if "quota" in lowered or "billing" in lowered:
         return ProviderError("The account has no remaining quota.", provider=provider)
+    if "max completion tokens" in lowered or "max output tokens" in lowered:
+        return ProviderError(
+            "The model ran out of output tokens before finishing its JSON response.",
+            provider=provider,
+            hint=(
+                "Try a model with a larger output budget, or lower the maximum "
+                "clip count in settings so each window returns less JSON."
+            ),
+        )
 
     return ProviderError(f"Request failed: {message}", provider=provider)

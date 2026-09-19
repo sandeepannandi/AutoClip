@@ -50,6 +50,8 @@ export interface ExportRecord {
 
 export type ClipStatus = 'candidate' | 'kept' | 'discarded' | 'exported'
 
+export type CaptionPosition = 'bottom' | 'middle' | 'top'
+
 export interface Clip {
   id: string
   job_id: string
@@ -61,12 +63,15 @@ export interface Clip {
   end_word: number
   title: string
   hook: string
+  caption_position: CaptionPosition
   score: number
   reason: string
   status: ClipStatus
   user_trimmed: boolean
   caption_style: string
+  color_grade: string
   ratio: string
+  caption_color: string
   exports: ExportRecord[]
 }
 
@@ -114,6 +119,10 @@ export interface CaptionStyle {
     allCaps: boolean
     sizeRatio: number
     marginRatio: number
+    marginHRatio: number
+    position: CaptionPosition
+    topMarginRatio: number
+    entrance: boolean
     boxed: boolean
     animation: string
     maxWords: number
@@ -146,6 +155,7 @@ export interface Settings {
     prefer_hardware_encoder: boolean
     crf: number
     write_srt: boolean
+    color_grade: string
   }
   insecure_secret_storage: boolean
   keys_present: Record<string, boolean>
@@ -266,17 +276,30 @@ export const api = {
 
   patchCaptions: (
     clipId: string,
-    patch: { words?: Word[]; caption_style?: string; ratio?: string },
+    patch: {
+      words?: Word[]
+      caption_style?: string
+      ratio?: string
+      caption_position?: CaptionPosition
+      color_grade?: string
+      caption_color?: string
+    },
   ) =>
     request<Clip>(`/api/clips/${clipId}/captions`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
 
-  exportClip: (clipId: string, ratio: string, style: string, writeSrt = false) =>
+  exportClip: (
+    clipId: string,
+    ratio: string,
+    style: string,
+    colorGrade: string,
+    writeSrt = false,
+  ) =>
     request<ExportRecord>(`/api/clips/${clipId}/export`, {
       method: 'POST',
-      body: JSON.stringify({ ratio, style, write_srt: writeSrt }),
+      body: JSON.stringify({ ratio, style, write_srt: writeSrt, color_grade: colorGrade }),
     }),
 
   captionStyles: () => request<CaptionStyle[]>('/api/caption-styles'),

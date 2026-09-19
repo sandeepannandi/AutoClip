@@ -147,12 +147,17 @@ class ClipOut(BaseModel):
     end_word: int
     title: str
     hook: str
+    caption_position: models.CaptionPosition = "bottom"
     score: int
     reason: str
     status: str
     user_trimmed: bool
     caption_style: str = "bold_pop"
+    color_grade: str = "none"
     ratio: str = "9:16"
+    #: Effective caption colour for this clip — an explicit per-clip override,
+    #: or the preset's default when none is set.
+    caption_color: str = "#FFFFFF"
     exports: list[ExportOut] = Field(default_factory=list)
 
     @classmethod
@@ -162,6 +167,8 @@ class ClipOut(BaseModel):
         *,
         edit: models.ClipEdit | None = None,
         exports: list[models.Export] | None = None,
+        default_color_grade: str = "none",
+        caption_color: str = "#FFFFFF",
     ) -> ClipOut:
         return cls(
             id=clip.id,
@@ -174,13 +181,20 @@ class ClipOut(BaseModel):
             end_word=clip.end_word,
             title=clip.title,
             hook=clip.hook,
+            caption_position=edit.caption_position if edit else "bottom",
             score=clip.score,
             reason=clip.reason,
             status=clip.status,
             user_trimmed=clip.user_trimmed,
             caption_style=edit.caption_style if edit else "bold_pop",
+            color_grade=(
+                edit.color_grade
+                if edit is not None and edit.color_grade is not None
+                else default_color_grade
+            ),
             ratio=edit.ratio if edit else "9:16",
             exports=[ExportOut.of(e) for e in (exports or [])],
+            caption_color=caption_color,
         )
 
 
@@ -197,12 +211,21 @@ class CaptionPatchIn(BaseModel):
     words: list[WordOut] | None = None
     caption_style: str | None = None
     ratio: Literal["9:16", "1:1", "16:9"] | None = None
+    caption_position: models.CaptionPosition | None = None
+    color_grade: str | None = None
+    #: Per-clip primary colour override, e.g. "#FFE500". None clears it back to
+    #: "use the preset default", which has no per-colour storage of its own.
+    #: Validated in the endpoint so an invalid value surfaces as a 400, matching
+    #: how unknown styles and grades are rejected.
+    caption_color: str | None = None
 
 
 class ExportRequestIn(BaseModel):
     ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
     style: str = "bold_pop"
     write_srt: bool = False
+    #: None falls back to the saved settings default colour grade.
+    color_grade: str | None = None
 
 
 class CaptionStyleOut(BaseModel):

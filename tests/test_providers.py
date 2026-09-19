@@ -217,3 +217,88 @@ class TestRegistry:
         provider = OpenAIProvider("llama-3.1", base_url="https://openrouter.ai/api/v1")
 
         assert provider.base_url == "https://openrouter.ai/api/v1"
+
+
+class TestOpenAIErrorClassification:
+    def test_json_mode_failure_is_detected(self) -> None:
+        from autoclip.providers.openai_provider import _is_json_mode_failure
+
+        assert _is_json_mode_failure(Exception("400 {'error': {'code': 'json_validate_failed'}}"))
+        assert _is_json_mode_failure(
+            Exception("Failed to generate JSON. Please adjust your prompt.")
+        )
+        assert not _is_json_mode_failure(Exception("401 invalid api key"))
+
+    def test_output_token_cap_is_detected(self) -> None:
+        from autoclip.providers.openai_provider import _is_output_token_cap
+
+        assert _is_output_token_cap(
+            Exception("max completion tokens reached before generating a valid document")
+        )
+        assert not _is_output_token_cap(Exception("json_validate_failed"))
+
+    def test_rejected_parameter_is_detected(self) -> None:
+        from autoclip.providers.openai_provider import _is_rejected_parameter
+
+        assert _is_rejected_parameter(Exception("Unrecognized request argument: max_tokens"))
+        assert not _is_rejected_parameter(Exception("max completion tokens reached"))
+
+
+class _FakeMessage:
+    def __init__(self, content: str) -> None:
+        self.content = content
+
+
+class _FakeResponse:
+    def __init__(self, content: str) -> None:
+        self.choices = [type("Choice", (), {"message": _FakeMessage(content)})()]
+
+
+class _FakeCompletions:
+    """Plays back a script of responses or exceptions, recording every call."""
+
+    def __init__(self, script: list) -> None:
+        self.script = list(script)
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        action = self.script.pop(0)
+        if isinstance(action, Exception):
+            raise action
+        return _FakeResponse(action)
+
+
+class TestOpenAICompleteFallback:
+    """The request ladder: JSON mode first, plain retry on the known failures."""
+
+    def _provider_with(self, script: list):
+        from autoclip.providers import OpenAIProvider
+
+        provider = OpenAIProvider("gpt-4o", api_key="test-key")
+        completions = _FakeCompletions(script)
+        provider._client = lambda: type(
+            "Client", (), {"chat": type("Chat", (), {"completions": completions})()}
+        )()
+        return completions
+
+    async def test_json_mode_failure_retries_without_response_format(self) -> None:
+        from autoclip.providers import OpenAIProvider
+
+        completions = self._provider_with(
+            [
+                Exception("400 Failed to validate JSON. json_validate_failed"),
+                '{"clips":[]}',
+            ]
+        )
+        provider = OpenAIProvider("gpt-4o", api_key="test-key")
+        provider._client = lambda: type(
+            "Client", (), {"chat": type("Chat", (), {"completions": completions})()}
+        )()
+
+        text = await provider._complete("system", "user", DetectionConfig())
+
+        assert text == '{"clips":[]}'
+        assert "response_format" in completions.calls[0]
+        assert "response_format" not in completions.calls[1]
+        assert completions.calls[0]["max_tokens"] == 8192

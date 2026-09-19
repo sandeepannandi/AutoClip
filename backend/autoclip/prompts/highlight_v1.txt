@@ -6,13 +6,13 @@ You will be given a section of a transcript. Every word is tagged with its index
 
 Judge every candidate against four things, in this order of importance:
 
-1. **Hook strength.** The first three seconds decide everything. A clip must open on a line that creates a question, states something contrarian, names a specific number, or drops the listener into the middle of tension. It must NOT open on "so", "yeah", "um", "and then", a topic change, or the tail of an answer to a question the viewer never heard.
+1. **Hook strength.** The first three words decide everything. A clip must open on a line that creates a question, states something contrarian, names a specific number, or drops the listener into the middle of tension. It must NOT open on "so", "yeah", "um", "and then", a topic change, or the tail of an answer to a question the viewer never heard. Score the hook independently in `hook_strength` (0-100) — anything below 60 means the clip likely fails on a feed.
 
 2. **Self-containment.** A viewer with zero context must fully understand it. No unexplained pronouns referring to something said earlier. No "like I mentioned". No punchline whose setup is outside the clip. If understanding it requires the previous five minutes, it is not a clip.
 
 3. **Payoff.** Something has to actually land — a conclusion, a reversal, a concrete piece of advice, a genuine emotional beat, a number that reframes the topic. Interesting-sounding meandering is not payoff. If you cannot name what the viewer walks away with, the score is below 50.
 
-4. **Quotability.** The best clips contain one sentence a person would repeat, screenshot, or put in a comment.
+4. **Quotability.** The best clips contain one sentence a person would repeat, screenshot, or put in a comment. Point at it with `emphasis_words`: the one or two short phrases you would put on screen at full size. Pick words that carry the payoff, not filler.
 
 ## Boundaries
 
@@ -35,9 +35,15 @@ Return nothing rather than padding the list. A transcript section with three goo
 
 `title` — how a human editor would label this clip in a folder. Specific and concrete, under 60 characters. Not clickbait, not a summary of the topic. "Why most agencies die at 10 clients", not "Discussion about agency growth".
 
+`posting_title` — the version of the hook a creator would post as the caption. It can be punchier than the folder title, but must not promise something the clip does not deliver. Keep it under 90 characters, with the clip's central line or number up front.
+
 `hook` — quote the actual opening words of the clip, verbatim from the transcript. This is used to verify the clip starts where you think it does.
 
 `reason` — one sentence on why this clip works, naming the specific hook and payoff. Written for an editor deciding whether to keep it.
+
+## Caption style
+
+`best_style` — which caption preset suits the clip's energy: "bold_pop" for high energy and loud moments, "karaoke_fill" for a steady, didactic rhythm, "clean_lower" for calm professional narration, "boxed" for maximal readability over busy footage. Pick one of these four strings.
 
 ## Output
 
@@ -49,7 +55,11 @@ Respond with ONLY this JSON object. No prose before or after. No markdown fences
       "start_word_index": 1042,
       "end_word_index": 1385,
       "title": "Why most agencies die at 10 clients",
-      "hook": "Nobody tells you this about scaling",
+      "posting_title": "Most agencies die at 10 clients. Here's why",
+      "hook": "Nobody tells you this",
+      "hook_strength": 92,
+      "emphasis_words": ["agencies die", "10 clients"],
+      "best_style": "bold_pop",
       "score": 87,
       "reason": "Contrarian opener, names the specific failure point, closes on a quotable rule."
     }

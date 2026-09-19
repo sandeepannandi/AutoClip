@@ -17,6 +17,7 @@ from typing import Any, Literal
 SourceType = Literal["youtube", "upload"]
 JobStatus = Literal["queued", "running", "failed", "done", "cancelled"]
 ClipStatus = Literal["candidate", "kept", "discarded", "exported"]
+CaptionPosition = Literal["bottom", "middle", "top"]
 
 
 def new_id() -> str:
@@ -172,6 +173,12 @@ class ClipEdit:
     edited_words: list[dict[str, Any]] | None = None
     caption_style: str = "bold_pop"
     ratio: str = "9:16"
+    caption_position: CaptionPosition = "bottom"
+    #: Colour grade for this clip. None means "inherit the settings default".
+    color_grade: str | None = None
+    #: Caption primary colour override (#RRGGBB). None means "use the preset
+    #: default".
+    caption_color: str | None = None
     updated_at: str = field(default_factory=utcnow)
 
     @classmethod
@@ -182,6 +189,9 @@ class ClipEdit:
             edited_words=json.loads(raw) if raw else None,
             caption_style=row["caption_style"],
             ratio=row["ratio"],
+            caption_position=row["caption_position"],
+            color_grade=row["color_grade"],
+            caption_color=row["caption_color"],
             updated_at=row["updated_at"],
         )
 

@@ -100,13 +100,58 @@ CREATE INDEX idx_exports_clip ON exports(clip_id);
 """
 
 
+def _migration_v2(conn: sqlite3.Connection) -> None:
+    """Caption placement: per-clip bottom / middle / top positioning."""
+    conn.executescript(
+        """
+        ALTER TABLE clip_edits
+            ADD COLUMN caption_position TEXT NOT NULL DEFAULT 'bottom'
+            CHECK (caption_position IN ('bottom', 'middle', 'top'));
+        """
+    )
+
+
+def _migration_v3(conn: sqlite3.Connection) -> None:
+    """Per-clip colour grade, kept with the other caption choices.
+
+    NULL means the clip inherits the settings default; any explicit choice —
+    including "none" — is stored verbatim so clearing a grade (toggling it off)
+    is distinguishable from never having set one.
+    """
+    conn.executescript(
+        """
+        ALTER TABLE clip_edits
+            ADD COLUMN color_grade TEXT;
+        """
+    )
+
+
+def _migration_v4(conn: sqlite3.Connection) -> None:
+    """Per-clip caption colour override.
+
+    NULL means "use the preset's default primary colour"; any explicit hex like
+    ``#FFE500`` replaces it in the emitted ASS style line for this clip.
+    """
+    conn.executescript(
+        """
+        ALTER TABLE clip_edits
+            ADD COLUMN caption_color TEXT;
+        """
+    )
+
+
 def _migration_v1(conn: sqlite3.Connection) -> None:
     conn.executescript(_V1)
 
 
 #: Ordered migrations. Index + 1 is the resulting ``user_version``.
 #: Append only — never edit a migration that has shipped.
-MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [_migration_v1]
+MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
+    _migration_v1,
+    _migration_v2,
+    _migration_v3,
+    _migration_v4,
+]
 
 SCHEMA_VERSION = len(MIGRATIONS)
 

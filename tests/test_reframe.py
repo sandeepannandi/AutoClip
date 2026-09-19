@@ -127,6 +127,114 @@ class TestOneEuroFilter:
         assert first == second
 
 
+class TestLazyFollow:
+    CONFIG = smoothing.SmoothingConfig()
+    # With reference_px=600: follow_margin = 0.28*600 = 168px; hold = 0.06*600 = 36px.
+    REFERENCE = 600.0
+
+    def test_parks_while_the_subject_stays_inside_the_band(self) -> None:
+        # Wandering, waving, weight-shifting — none of it leaves the 168px band,
+        # so the camera never wakes up.
+        samples = [(i * 0.2, 500 + (50 if i % 2 else -50)) for i in range(40)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+        values = [v for _, v in followed]
+
+        assert all(v == pytest.approx(450.0) for v in values)
+
+    def test_follows_a_genuine_drift_past_the_band(self) -> None:
+        # A fast sustained departure keeps the camera chasing once triggered,
+        # but it holds its ground until the drift crosses the trigger band.
+        samples = [(i * 0.2, 300 + i * 40) for i in range(30)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+
+        parked = [v for _, v in followed[:3]]
+        assert all(v == pytest.approx(300.0) for v in parked)
+        assert followed[-1][1] > 800
+
+    def test_hysteresis_stops_it_waking_again_on_small_movement(self) -> None:
+        # Once the subject returns inside the narrow hold band the camera parks,
+        # and their subsequent small movement must not re-trigger a chase.
+        samples = [
+            (0.0, 500.0),
+            (0.2, 700.0),  # far out: chase
+            (0.4, 550.0),  # back to ~centre: stop
+            (0.6, 560.0),  # small wobble inside the band
+            (0.8, 575.0),
+            (1.0, 545.0),
+        ]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+
+        parked = [v for _, v in followed[2:]]
+        assert all(v == pytest.approx(followed[1][1]) for v in parked)
+        assert followed[1][1] == pytest.approx(544.0, abs=1.0)
+
+    def test_parks_through_an_8_percent_drift(self) -> None:
+        # 8% of the 600px crop width is 48px — well inside the 168px follow
+        # band. A small head tilt / shoulder turn must leave the frame parked
+        # start to end, with output identical to the initial position.
+        samples = [(i * 0.2, 500 + 48 * math.sin(i * 0.5)) for i in range(40)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+        values = [v for _, v in followed]
+
+        assert all(v == pytest.approx(500.0) for v in values)
+
+    def test_chases_and_settles_inside_the_hold_band_after_a_35_percent_crossing(
+        self,
+    ) -> None:
+        # A crossing of 35% of the crop width (210px) wakes the camera, which
+        # chases slowly (velocity-clamped ease) and then parks once the subject
+        # is back inside the narrow 36px hold band.
+        samples = [(i * 0.2, 500.0) for i in range(3)] + [(i * 0.2, 710.0) for i in range(3, 33)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+        values = [v for _, v in followed]
+
+        assert all(v == pytest.approx(500.0) for v in values[:3])
+        assert max(values) > 550.0  # it actually chased instead of giving up
+        assert abs(values[-1] - 710.0) <= 36.0  # settled inside the hold band
+        assert values[-1] == pytest.approx(values[-2])  # and parked there
+
+    def test_boundary_pacing_never_oscillates_the_camera(self) -> None:
+        # Drifting in/out at +-120px around centre crosses the OLD 108px
+        # trigger (0.18*600 — the width that used to re-frame on every shoulder
+        # turn) but stays inside the widened 168px band. The camera must stay
+        # parked the whole time: zero re-framing, not zero-ish.
+        samples = [(0.0, 500.0)] + [(i * 0.2, 500 + (120 if i % 2 else -120)) for i in range(1, 60)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+        values = [v for _, v in followed]
+
+        assert all(v == pytest.approx(500.0) for v in values)
+
+    def test_chase_velocity_is_clamped(self) -> None:
+        # A detection glitch must never whip the frame across the shot.
+        samples = [(0.0, 0.0), (0.2, 5000.0), (0.4, 5000.0), (0.6, 5000.0)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+
+        for (t0, v0), (t1, v1) in zip(followed, followed[1:], strict=False):
+            assert abs(v1 - v0) <= self.CONFIG.max_velocity_px_s * (t1 - t0) + 1e-6
+        assert followed[-1][1] < 1000
+
+    def test_single_sample_passes_through(self) -> None:
+        assert smoothing.lazy_follow([(0.0, 100.0)], reference_px=600.0) == [(0.0, 100.0)]
+
+    def test_empty_input(self) -> None:
+        assert smoothing.lazy_follow([], reference_px=600.0) == []
+
+    def test_filter_is_deterministic(self) -> None:
+        samples = [(i * 0.2, 300 + math.sin(i) * 50) for i in range(30)]
+
+        first = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+        second = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+
+        assert first == second
+
+
 class TestAxisExpression:
     def test_single_keyframe_is_a_constant(self) -> None:
         assert axis_expression([CropKeyframe(0.0, 100.0, 50.0)], "x") == "100.0"

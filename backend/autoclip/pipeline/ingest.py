@@ -158,6 +158,28 @@ def _translate_ytdlp_error(exc: Exception, settings: IngestSettings) -> IngestEr
     """Turn a yt-dlp failure into something the user can act on."""
     message = str(exc).lower()
 
+    # yt-dlp reads browser cookies by copying the SQLite cookie database to a
+    # temp file. If the browser is still running the database is locked and the
+    # copy fails ("Could not copy <Browser> cookie database") — the most common
+    # YouTube failure on Windows, where Chrome lingers in the system tray even
+    # after every window is closed.
+    if "could not copy" in message and "cookie" in message:
+        browser = settings.cookies_from_browser or "that browser"
+        if settings.cookies_from_browser:
+            display = settings.cookies_from_browser.capitalize()
+            source = f" from {browser}"
+        else:
+            display = "the browser"
+            source = ""
+        hint = (
+            f"yt-dlp reads cookies by copying the browser database{source}, "
+            "but the file is locked while the browser is running. Fully quit "
+            f"{display} — close all windows AND check the system tray for a "
+            "lingering background process — then try again. You must also be "
+            "signed in to YouTube in that browser."
+        )
+        return IngestError(f"Could not copy cookies{source}.", hint=hint)
+
     if any(marker in message for marker in _BOT_CHECK_MARKERS):
         if settings.cookies_from_browser:
             hint = (
