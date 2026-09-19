@@ -1,14 +1,28 @@
 # AutoClip
 
-**Open-source, local-first AI video clipper.** Long video in → ranked, caption-burned, speaker-tracked 9:16 clips out.
+**Open-source, local-first AI video clipper.** Long video in → ranked, caption-burned, speaker-tracked 9:16 clips out. This is a fork of [artbyjazi/autoclip](https://github.com/artbyjazi/autoclip) with extra features — see [This fork](#this-fork).
 
-[![CI](https://github.com/artbyjazi/autoclip/actions/workflows/ci.yml/badge.svg)](https://github.com/artbyjazi/autoclip/actions/workflows/ci.yml)
+[![CI](https://github.com/sandeepannandi/AutoClip/actions/workflows/ci.yml/badge.svg)](https://github.com/sandeepannandi/AutoClip/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Python 3.11 | 3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
 
 Paste a YouTube link or drop a file. AutoClip transcribes it, uses an LLM to find the moments worth clipping, reframes them to vertical while tracking whoever is speaking, burns in animated captions, and exports platform-ready MP4s.
 
 No accounts. No uploads to anyone's servers. No watermarks. No subscription.
+
+---
+
+## This fork
+
+A fork of [artbyjazi/autoclip](https://github.com/artbyjazi/autoclip), built on top of it — you get everything the original ships, plus:
+
+- **Color grading you can actually see.** Four presets — `warm`, `punchy`, `cool`, `film` — built on real white-balance moves that measurably shift the image (~2–7% mean pixel delta), not the imperceptible cast most tools ship. Render tests gate each preset on that minimum shift, so a future tweak can't silently fade it back to invisible.
+- **Live grade preview.** Review applies a CSS approximation of the grade to the player, with a *Compare with original footage* toggle for instant A/B before you export.
+- **Per-clip caption colour.** Override the caption text colour per clip in Review; the preview and the exported burn-in match exactly.
+- **Captions never overlap.** Wrapped caption lines are clamped so a long run of words can't collide on screen.
+- **Calmer speaker tracking.** A lazy-follow (hysteresis dead-band) reframe controller parks the camera while the speaker is comfortably in frame and eases after them only on a genuinely big move — no more glued-to-the-face shake.
+- **Hardened highlight detection.** Windows that error surface their real errors instead of a silent "no clips", the JSON output-token budget is raised so subtle picks aren't truncated away, and new model output (hook strength, emphasis words, suggested caption style, posting title) is coerced from freeform responses.
+- **Resilient ingestion.** `autoclip update-ytdlp` works in uv venvs by falling back uv → pip → ensurepip, and the Windows locked-browser cookie-database YouTube failure is diagnosed with a fix rather than a cryptic ffmpeg error.
 
 ---
 
@@ -67,7 +81,7 @@ sudo apt install ffmpeg
 ## Quickstart
 
 ```bash
-git clone https://github.com/artbyjazi/autoclip.git
+git clone https://github.com/sandeepannandi/AutoClip.git
 ```
 
 ```bash
