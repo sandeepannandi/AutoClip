@@ -35,7 +35,15 @@ jobs:
 
       - name: Install ffmpeg (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+        # Not `apt-get install ffmpeg`: Ubuntu's package has shipped without
+        # the `ass` (libass) filter, which the caption stage needs. GitHub
+        # Actions caught it in a real run ("This ffmpeg has no 'ass' filter").
+        # johnvansickle.com's static build bundles libass, fontconfig, and the
+        # x264 encoder, so the render suite exercises the real path.
+        run: |
+          curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
+          tar -C /tmp -xJf /tmp/ffmpeg.tar.xz
+          sudo mv /tmp/ffmpeg-*-static/ffmpeg /tmp/ffmpeg-*-static/ffprobe /usr/local/bin/
 
       - name: Install ffmpeg (macOS)
         if: runner.os == 'macOS'
@@ -97,7 +105,6 @@ jobs:
 
       - name: Type check
         run: uv run --no-sync mypy backend/autoclip
-        continue-on-error: true
 
       - name: Unit tests
         run: uv run --no-sync pytest -m "not slow and not golden and not e2e" -q

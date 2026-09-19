@@ -68,9 +68,9 @@ class OpenAIProvider(LLMProvider):
         return AsyncOpenAI(**kwargs)
 
     def _is_local(self) -> bool:
-        return bool(self.base_url) and (
-            "localhost" in self.base_url or "127.0.0.1" in self.base_url
-        )
+        if not self.base_url:
+            return False
+        return "localhost" in self.base_url or "127.0.0.1" in self.base_url
 
     async def _complete(self, system: str, user: str, config: DetectionConfig) -> str:
         client = self._client()

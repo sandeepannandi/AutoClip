@@ -229,13 +229,13 @@ def doctor() -> None:
             "token with [cyan]autoclip config set-secret huggingface_token[/cyan]."
         )
 
-    for missing, extra in (
+    for is_missing, extra in (
         (not deps.faster_whisper, "faster-whisper"),
         (not deps.mediapipe, "mediapipe"),
         (not deps.scenedetect, "scenedetect"),
         (not deps.ytdlp, "yt-dlp"),
     ):
-        if missing:
+        if is_missing:
             remediation.append(
                 f"[cyan]{extra}[/cyan] is not installed — reinstall AutoClip's core "
                 "dependencies with [cyan]uv pip install -e '.[dev]'[/cyan]."

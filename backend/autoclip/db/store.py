@@ -163,13 +163,13 @@ def update_job(
         if value is not None:
             fields[name] = value
 
-    for name, value in (
+    for name, nullable in (
         ("error", error),
         ("started_at", started_at),
         ("finished_at", finished_at),
     ):
-        if not isinstance(value, _Unset):
-            fields[name] = value
+        if not isinstance(nullable, _Unset):
+            fields[name] = nullable
 
     assignments = ", ".join(f"{name} = ?" for name in fields)
     with connection() as conn:
