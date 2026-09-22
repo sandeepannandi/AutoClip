@@ -713,8 +713,16 @@ def serve(
         # Delayed so the browser doesn't race the server's first bind.
         threading.Timer(1.5, lambda: webbrowser.open(url)).start()
 
+    # When frozen (PyInstaller) the string form is resolved by re-importing by
+    # name, which is fragile inside a bundle — pass the app object instead.
+    target: object = "autoclip.app:app"
+    if getattr(sys, "frozen", False):
+        from .app import app as fastapi_app
+
+        target = fastapi_app
+
     uvicorn.run(
-        "autoclip.app:app",
+        target,
         host=host,
         port=port,
         reload=reload,
