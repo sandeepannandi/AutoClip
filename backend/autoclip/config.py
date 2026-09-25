@@ -82,6 +82,16 @@ class IngestSettings(BaseModel):
     prefer_youtube_captions: bool = False
 
 
+class TrackingSettings(BaseModel):
+    """Posted-clip performance tracking and outcome learning."""
+
+    #: Fold logged posting outcomes into highlight ranking and few-shot prompt
+    #: examples. With no history, or with this off, behaviour is unchanged.
+    learn_from_outcomes: bool = True
+    #: Postings with fewer logged snapshots than this contribute no signal.
+    min_snapshots_for_signal: int = 1
+
+
 class ExportSettings(BaseModel):
     ratio: Literal["9:16", "1:1", "16:9"] = "9:16"
     caption_style: str = "bold_pop"
@@ -113,6 +123,7 @@ class Settings(BaseModel):
     clips: ClipSettings = Field(default_factory=ClipSettings)
     ingest: IngestSettings = Field(default_factory=IngestSettings)
     export: ExportSettings = Field(default_factory=ExportSettings)
+    tracking: TrackingSettings = Field(default_factory=TrackingSettings)
 
     #: Set when secrets had to be written to config.json because no keyring
     #: backend was usable. Surfaced as a warning in the UI and in `doctor`.

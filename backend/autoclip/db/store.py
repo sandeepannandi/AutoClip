@@ -18,6 +18,8 @@ from .models import (
     Export,
     Job,
     JobStatus,
+    PerformanceSnapshot,
+    Posting,
     Source,
     Transcript,
     utcnow,
@@ -399,3 +401,136 @@ def list_exports(clip_id: str) -> list[Export]:
             "SELECT * FROM exports WHERE clip_id = ? ORDER BY created_at DESC", (clip_id,)
         ).fetchall()
     return [Export.from_row(r) for r in rows]
+
+
+# --------------------------------------------------------------------------
+# Postings — where a clip was published
+# --------------------------------------------------------------------------
+
+
+def create_posting(posting: Posting) -> Posting:
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO postings (id, clip_id, platform, url, caption_used, notes,
+                                  posted_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                posting.id,
+                posting.clip_id,
+                posting.platform,
+                posting.url,
+                posting.caption_used,
+                posting.notes,
+                posting.posted_at,
+                posting.created_at,
+            ),
+        )
+    return posting
+
+
+def get_posting(posting_id: str) -> Posting | None:
+    with connection() as conn:
+        row = conn.execute("SELECT * FROM postings WHERE id = ?", (posting_id,)).fetchone()
+    return Posting.from_row(row) if row else None
+
+
+def list_postings(clip_id: str) -> list[Posting]:
+    """Postings for one clip, oldest first — the order they were logged."""
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM postings WHERE clip_id = ? ORDER BY created_at ASC", (clip_id,)
+        ).fetchall()
+    return [Posting.from_row(r) for r in rows]
+
+
+def list_all_postings() -> list[Posting]:
+    """Every posting, newest first — the tracking report's scan order."""
+    with connection() as conn:
+        rows = conn.execute("SELECT * FROM postings ORDER BY created_at DESC").fetchall()
+    return [Posting.from_row(r) for r in rows]
+
+
+def update_posting(
+    posting_id: str,
+    *,
+    url: str | None = None,
+    caption_used: str | None = None,
+    notes: str | None = None,
+    posted_at: str | None = None,
+) -> None:
+    """Patch the editable fields of a posting. Omitted fields are left alone."""
+    fields: dict[str, Any] = {}
+    for name, value in (
+        ("url", url),
+        ("caption_used", caption_used),
+        ("notes", notes),
+        ("posted_at", posted_at),
+    ):
+        if value is not None:
+            fields[name] = value
+
+    if not fields:
+        return
+
+    assignments = ", ".join(f"{name} = ?" for name in fields)
+    with connection() as conn:
+        conn.execute(
+            f"UPDATE postings SET {assignments} WHERE id = ?",
+            (*fields.values(), posting_id),
+        )
+
+
+def delete_posting(posting_id: str) -> None:
+    """Remove a posting and, via the foreign key, its snapshots."""
+    with connection() as conn:
+        conn.execute("DELETE FROM postings WHERE id = ?", (posting_id,))
+
+
+# --------------------------------------------------------------------------
+# Performance snapshots — observed metrics for a posting
+# --------------------------------------------------------------------------
+
+
+def add_snapshot(snapshot: PerformanceSnapshot) -> PerformanceSnapshot:
+    with connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO performance_snapshots
+                (id, posting_id, captured_at, views, likes, comments, shares, saves,
+                 avg_watch_seconds, retention_pct)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snapshot.id,
+                snapshot.posting_id,
+                snapshot.captured_at,
+                snapshot.views,
+                snapshot.likes,
+                snapshot.comments,
+                snapshot.shares,
+                snapshot.saves,
+                snapshot.avg_watch_seconds,
+                snapshot.retention_pct,
+            ),
+        )
+    return snapshot
+
+
+def get_snapshot(snapshot_id: str) -> PerformanceSnapshot | None:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM performance_snapshots WHERE id = ?", (snapshot_id,)
+        ).fetchone()
+    return PerformanceSnapshot.from_row(row) if row else None
+
+
+def list_snapshots(posting_id: str) -> list[PerformanceSnapshot]:
+    """Snapshots for one posting, oldest first, so growth curves read naturally."""
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM performance_snapshots WHERE posting_id = ? ORDER BY captured_at ASC",
+            (posting_id,),
+        ).fetchall()
+    return [PerformanceSnapshot.from_row(r) for r in rows]

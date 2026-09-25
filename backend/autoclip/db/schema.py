@@ -144,6 +144,47 @@ def _migration_v1(conn: sqlite3.Connection) -> None:
     conn.executescript(_V1)
 
 
+def _migration_v5(conn: sqlite3.Connection) -> None:
+    """Performance tracking: where a clip was posted, and how it performed.
+
+    ``postings`` records one upload of a clip to one platform; ``snapshots``
+    records observed metrics for that posting over time, so a clip can be
+    compared against the account's own baseline rather than raw view counts.
+    Both are user-supplied (manual entry, or an official platform API later) —
+    nothing here is scraped.
+    """
+    conn.executescript(
+        """
+        CREATE TABLE postings (
+            id           TEXT PRIMARY KEY,
+            clip_id      TEXT NOT NULL REFERENCES clips(id) ON DELETE CASCADE,
+            platform     TEXT NOT NULL
+                         CHECK (platform IN ('tiktok', 'youtube', 'instagram', 'other')),
+            url          TEXT,
+            caption_used TEXT,
+            notes        TEXT,
+            posted_at    TEXT,
+            created_at   TEXT NOT NULL
+        );
+        CREATE INDEX idx_postings_clip ON postings(clip_id);
+
+        CREATE TABLE performance_snapshots (
+            id                TEXT PRIMARY KEY,
+            posting_id        TEXT NOT NULL REFERENCES postings(id) ON DELETE CASCADE,
+            captured_at       TEXT NOT NULL,
+            views             INTEGER NOT NULL DEFAULT 0,
+            likes             INTEGER NOT NULL DEFAULT 0,
+            comments          INTEGER NOT NULL DEFAULT 0,
+            shares            INTEGER NOT NULL DEFAULT 0,
+            saves             INTEGER NOT NULL DEFAULT 0,
+            avg_watch_seconds REAL,
+            retention_pct     REAL
+        );
+        CREATE INDEX idx_snapshots_posting ON performance_snapshots(posting_id, captured_at);
+        """
+    )
+
+
 #: Ordered migrations. Index + 1 is the resulting ``user_version``.
 #: Append only — never edit a migration that has shipped.
 MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
@@ -151,6 +192,7 @@ MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_v2,
     _migration_v3,
     _migration_v4,
+    _migration_v5,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

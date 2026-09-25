@@ -18,8 +18,16 @@ controller live here:
 speaker tracking. Re-centering on the person is what makes a camera feel glued
 to them: the crop chases every drift, so the frame never rests. ``lazy_follow``
 holds the camera parked while the subject stays inside a margin, chases with a
-decelerating ease once they pass it, and parks again the instant they return to
-the near-centre band — the same bank-and-hold rhythm an operator uses.
+decelerating ease once they pass it, and returns to the near-centre band — the
+same bank-and-hold rhythm an operator uses.
+
+The park is not a freeze. While parked the camera *settles*: it eases toward
+the subject at a rate roughly an order of magnitude slower than a chase. A few
+pixels per frame is invisible as motion but, over a second or two, puts the
+subject back on the centre line — the frame the viewer actually sees is
+composed, while the micro-movement that gets it there never registers. This is
+what keeps a subject who drifts and stops from standing near the frame edge for
+the rest of the shot.
 
 Reference: Casiez, Roussel & Vogel, "1€ Filter" (CHI 2012).
 """
@@ -117,6 +125,18 @@ class SmoothingConfig:
     #: Kept slow (~0.60s) so a triggered chase reads as a calm operator pan,
     #: not a snap. ``max_velocity_px_s`` is the hard ceiling on top of it.
     follow_tau_s: float = 0.60
+    #: Time constant of the settle (seconds). While parked inside the band the
+    #: camera keeps easing toward the subject at this much slower rate, so the
+    #: resting frame ends centred without the settle registering as motion —
+    #: a 40px offset closes at ~5 px/s initially and decays exponentially,
+    #: which is invisible against normal subject sway. Off-centre parking is
+    #: the complaint this fixes: a subject who drifts and stops used to be
+    #: framed off-centre for the rest of the shot.
+    settle_tau_s: float = 8.0
+    #: Fraction of ``reference_px`` below which the settle is suspended. At rest
+    #: the dead zone absorbs detection noise anyway; this is a floor for
+    #: reference sizes so small the settle step would be indivisible.
+    settle_dead_zone_ratio: float = 0.01
 
 
 def smooth_series(
@@ -178,13 +198,21 @@ def lazy_follow(
     2. once the subject leaves that band, chases with an exponential ease
        (``follow_tau_s``) that decelerates as it closes in, capped by
        ``max_velocity_px_s``;
-    3. stops dead the instant the subject is back inside the narrower hold band
-       (``hold_margin_ratio``), and stays parked there no matter how much they
-       wander inside it — the wider trigger band means it does not wake up and
-       chase again until they genuinely leave.
+    3. leaves the chase the instant the subject is back inside the narrower
+       hold band (``hold_margin_ratio``), and will not wake into a full chase
+       again until they genuinely leave the wide trigger band.
 
-    The hysteresis between the trigger and hold bands keeps a subject pacing
-    on the boundary from toggling the camera on and off.
+    While parked — including after a chase ends — the camera *settles*: it
+    eases toward the subject at the much slower ``settle_tau_s`` rate, so a
+    subject who drifts and stops is re-centred over the following second or
+    two instead of being framed off-centre for the rest of the shot. The settle
+    is deliberately ~1 px/s on a phone-width crop: invisible as motion, but it
+    is what puts the resting frame on the centre line. Movement below
+    ``settle_dead_zone_ratio`` of ``reference_px`` is not corrected at all —
+    that margin is where detection noise lives.
+
+    The hysteresis between the trigger and hold bands still keeps a subject
+    pacing on the boundary from toggling the camera between chase and rest.
 
     Preconditions:
         samples are sorted by timestamp, ``reference_px`` is the tight crop
@@ -196,6 +224,7 @@ def lazy_follow(
     hold_margin = max(config.hold_margin_ratio * reference_px, 1.0)
     if hold_margin >= follow_margin:
         hold_margin = follow_margin * 0.5
+    settle_dead_zone = max(config.settle_dead_zone_ratio * reference_px, 1.0)
 
     if len(samples) <= 1:
         return list(samples)
@@ -213,8 +242,8 @@ def lazy_follow(
             error = target - camera
 
             if chasing:
-                # We stop as soon as the subject is back in the safe inner
-                # band — the camera parks where it is instead of re-centring.
+                # The chase ends inside the safe inner band; the settle takes
+                # over from there and finishes the centring invisibly.
                 if abs(error) < hold_margin:
                     chasing = False
             elif abs(error) > follow_margin:
@@ -228,6 +257,13 @@ def lazy_follow(
                 max_step = config.max_velocity_px_s * dt
                 if abs(step) > max_step:
                     step = math.copysign(max_step, step)
+                camera += step
+            elif abs(error) > settle_dead_zone:
+                # Settle: the same ease at a far slower time constant. A few
+                # pixels per frame reads as stillness but re-centres within a
+                # second or two, so the resting frame ends composed.
+                alpha = 1.0 - math.exp(-dt / config.settle_tau_s)
+                step = error * alpha
                 camera += step
 
         output.append((timestamp, camera))

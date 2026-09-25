@@ -15,6 +15,7 @@ import {
 import { CaptionEditor } from '../components/CaptionEditor'
 import { ClipPlayer } from '../components/ClipPlayer'
 import { ErrorNote } from '../components/ErrorNote'
+import { PerformancePanel } from '../components/PerformancePanel'
 import { TrimBar } from '../components/TrimBar'
 
 const RATIOS = ['9:16', '1:1', '16:9'] as const
@@ -424,6 +425,8 @@ export function Review() {
                     </>
                   )}
                 </div>
+
+                <PerformancePanel clipId={selected.id} />
 
                 <div className="border-t border-ink-800 pt-6">
                   <button

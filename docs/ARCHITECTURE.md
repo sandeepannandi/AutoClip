@@ -145,6 +145,33 @@ silently diverges their schema from a fresh install's.
 | `clips`      | detected clips with boundaries and scores           |
 | `clip_edits` | user caption edits, style, ratio                    |
 | `exports`    | rendered files                                      |
+| `postings`   | where a clip was posted (platform, URL, caption)    |
+| `performance_snapshots` | observed views/engagement for a posting over time |
+
+## Outcome learning
+
+`pipeline/outcomes.py` closes the loop between what the model *guessed* and
+what the audience actually did. Postings and their snapshots are user-supplied
+(manual entry in the UI or CLI; nothing is scraped). Each posting's growth
+curve is read at fixed checkpoints (24h / 72h / 7d) so clips posted at
+different times compare fairly, and a platform's baseline is the median of that
+account's own postings there — outperformance is always relative, never raw
+views, because raw views measure the account as much as the clip.
+
+Two consumers:
+
+- **Ranking.** In `build_clips`, after the LLM's top candidates are chosen,
+  empirical per-feature multipliers (caption style, duration band, platform)
+  can reorder the finalists. Estimates shrink toward 1.0 with sample count, are
+  clamped to [0.5, 2.0], and with no logged history the step is a no-op —
+  first-run behaviour is exactly the LLM-score order. Ranking only reorders
+  clips the model already qualified; it never adds or removes one.
+- **Few-shot calibration.** `detection_config` injects a few of the account's
+  own best and worst performers into the detection prompt as examples, so
+  scoring leans toward this audience's taste rather than generic advice.
+
+Both are behind `tracking.learn_from_outcomes` (on by default) and fail open:
+any error building the model degrades to unmodified LLM-score behaviour.
 
 ## Provider abstraction
 
@@ -156,6 +183,18 @@ The retry-with-feedback loop lives in the base class: a schema violation is
 retried once with the validation error appended to the prompt. Small local
 models fail the contract often enough that this converts most failures into
 successes, and it costs nothing when the first response is already valid.
+
+## Reframing: still without off-centre
+
+The reframe controller (`reframe/smoothing.py`) trades between two failure
+modes: a camera glued to the subject (constant reframing) and a camera that
+parks off-centre. The lazy-follow dead-band parks aggressively, but the park is
+a *settle*, not a freeze — while parked the crop eases toward the subject at
+~1 px/s (`settle_tau_s`), below the threshold where it reads as motion, so the
+resting frame ends on the centre line. Close-ups are tracked rather than
+mean-locked (a mean-locked close-up freezes the subject's drift), and genuine
+locks sit on the median observed position, which is robust to detection
+outliers.
 
 ## Concurrency
 

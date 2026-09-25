@@ -17,7 +17,8 @@ Everything the original [autoclip](https://github.com/artbyjazi/autoclip) ships,
 - **Color grading you can actually see** — four presets (`warm`, `punchy`, `cool`, `film`) with a live CSS preview and a _Compare with original footage_ toggle.
 - **Per-clip caption colour** — override the caption text colour per clip; the preview and the burnt-in export match.
 - **Captions never overlap** — wrapped lines are clamped so long runs of words can't collide.
-- **Calmer speaker tracking** — a lazy-follow (hysteresis dead-band) controller parks the camera until a genuinely big move.
+- **Calmer speaker tracking that stays centred** — a lazy-follow (hysteresis dead-band) controller parks the camera until a genuinely big move, then keeps settling toward the speaker at an invisible ~1 px/s, so the resting frame is centred instead of frozen wherever the last pan stopped. Close-ups are tracked rather than mean-locked, and locks sit on the median position.
+- **Performance feedback loop** — log where you posted a clip (`autoclip track post`), log its stats over time (`autoclip track stats`), and the ranker learns from your account's own results: per-platform baselines, outperformance-based re-ranking, and few-shot prompt examples from your best and worst performers.
 - **Hardened highlights & ingestion** — real per-window errors, robust model-output coercion, and Windows `update-ytdlp`/cookie-database fixes.
 
 ## Quickstart
@@ -71,7 +72,7 @@ docker compose -f docker/compose.yaml --profile gpu up --build
 
 ## Using it
 
-Everything in the UI is also on the CLI: `doctor` (check), `serve` (web app), `clip <url|file>` (full pipeline), `jobs`, `providers`, `styles`, `config show`, `update-ytdlp`.
+Everything in the UI is also on the CLI: `doctor` (check), `serve` (web app), `clip <url|file>` (full pipeline), `jobs`, `providers`, `styles`, `track` (posting performance), `config show`, `update-ytdlp`.
 
 Caption styles: `bold_pop` (chunky, word lights up), `karaoke_fill` (words fill as spoken), `clean_lower` (minimal), `boxed` (high contrast).
 

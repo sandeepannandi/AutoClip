@@ -18,6 +18,7 @@ SourceType = Literal["youtube", "upload"]
 JobStatus = Literal["queued", "running", "failed", "done", "cancelled"]
 ClipStatus = Literal["candidate", "kept", "discarded", "exported"]
 CaptionPosition = Literal["bottom", "middle", "top"]
+Platform = Literal["tiktok", "youtube", "instagram", "other"]
 
 
 def new_id() -> str:
@@ -216,4 +217,67 @@ class Export:
             style=row["style"],
             size_bytes=row["size_bytes"],
             created_at=row["created_at"],
+        )
+
+
+@dataclass
+class Posting:
+    """One upload of a clip to one platform."""
+
+    id: str
+    clip_id: str
+    platform: Platform
+    url: str | None = None
+    #: The caption actually posted — usually the clip's ``posting_title``.
+    caption_used: str | None = None
+    notes: str | None = None
+    #: When the upload happened, ISO-8601. Distinct from ``created_at`` so a
+    #: user back-filling records keeps the real posting time.
+    posted_at: str | None = None
+    created_at: str = field(default_factory=utcnow)
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Posting:
+        return cls(
+            id=row["id"],
+            clip_id=row["clip_id"],
+            platform=row["platform"],
+            url=row["url"],
+            caption_used=row["caption_used"],
+            notes=row["notes"],
+            posted_at=row["posted_at"],
+            created_at=row["created_at"],
+        )
+
+
+@dataclass
+class PerformanceSnapshot:
+    """Observed metrics for a posting at one point in time."""
+
+    id: str
+    posting_id: str
+    captured_at: str = field(default_factory=utcnow)
+    views: int = 0
+    likes: int = 0
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+    #: Platform-reported mean watch time, when it exposes one (TikTok does).
+    avg_watch_seconds: float | None = None
+    #: Platform-reported percentage of viewers who finished the video.
+    retention_pct: float | None = None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> PerformanceSnapshot:
+        return cls(
+            id=row["id"],
+            posting_id=row["posting_id"],
+            captured_at=row["captured_at"],
+            views=row["views"],
+            likes=row["likes"],
+            comments=row["comments"],
+            shares=row["shares"],
+            saves=row["saves"],
+            avg_watch_seconds=row["avg_watch_seconds"],
+            retention_pct=row["retention_pct"],
         )

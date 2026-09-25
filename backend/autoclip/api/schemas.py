@@ -283,3 +283,138 @@ class SystemOut(BaseModel):
     gpu_name: str | None
     compute_type: str
     diarization_available: bool
+
+
+# --------------------------------------------------------------------------
+# Performance tracking
+# --------------------------------------------------------------------------
+
+
+class PostingIn(BaseModel):
+    """Log that a clip was posted to a platform."""
+
+    platform: Literal["tiktok", "youtube", "instagram", "other"]
+    url: str | None = None
+    caption_used: str | None = None
+    notes: str | None = None
+    #: ISO-8601. Defaults to now; back-filling keeps history honest.
+    posted_at: str | None = None
+
+
+class PostingPatchIn(BaseModel):
+    url: str | None = None
+    caption_used: str | None = None
+    notes: str | None = None
+    posted_at: str | None = None
+
+
+class PostingOut(BaseModel):
+    id: str
+    clip_id: str
+    platform: str
+    url: str | None = None
+    caption_used: str | None = None
+    notes: str | None = None
+    posted_at: str | None = None
+    created_at: str
+
+    @classmethod
+    def of(cls, posting: models.Posting) -> PostingOut:
+        return cls(
+            id=posting.id,
+            clip_id=posting.clip_id,
+            platform=posting.platform,
+            url=posting.url,
+            caption_used=posting.caption_used,
+            notes=posting.notes,
+            posted_at=posting.posted_at,
+            created_at=posting.created_at,
+        )
+
+
+class SnapshotIn(BaseModel):
+    """One observation of a posting's metrics."""
+
+    views: int = Field(default=0, ge=0)
+    likes: int = Field(default=0, ge=0)
+    comments: int = Field(default=0, ge=0)
+    shares: int = Field(default=0, ge=0)
+    saves: int = Field(default=0, ge=0)
+    avg_watch_seconds: float | None = Field(default=None, ge=0)
+    retention_pct: float | None = Field(default=None, ge=0, le=100)
+    #: ISO-8601. Defaults to now.
+    captured_at: str | None = None
+
+
+class SnapshotOut(BaseModel):
+    id: str
+    posting_id: str
+    captured_at: str
+    views: int
+    likes: int
+    comments: int
+    shares: int
+    saves: int
+    avg_watch_seconds: float | None = None
+    retention_pct: float | None = None
+
+    @classmethod
+    def of(cls, snapshot: models.PerformanceSnapshot) -> SnapshotOut:
+        return cls(
+            id=snapshot.id,
+            posting_id=snapshot.posting_id,
+            captured_at=snapshot.captured_at,
+            views=snapshot.views,
+            likes=snapshot.likes,
+            comments=snapshot.comments,
+            shares=snapshot.shares,
+            saves=snapshot.saves,
+            avg_watch_seconds=snapshot.avg_watch_seconds,
+            retention_pct=snapshot.retention_pct,
+        )
+
+
+class PostingSummaryOut(PostingOut):
+    """A posting plus its derived metrics — the report and dashboard shape."""
+
+    checkpoint_hours: float
+    views_at_checkpoint: float
+    engagement_rate: float | None = None
+    interactions: int
+    retention_pct: float | None = None
+    snapshot_count: int
+    baseline_views: float | None = None
+    #: Achieved views over the platform baseline at the comparison checkpoint.
+    outperformance: float | None = None
+
+    @classmethod
+    def of_summary(cls, posting: models.Posting, summary: dict[str, Any]) -> PostingSummaryOut:
+        base = PostingOut.of(posting)
+        return cls(
+            **base.model_dump(),
+            checkpoint_hours=summary["checkpoint_hours"],
+            views_at_checkpoint=summary["views_at_checkpoint"],
+            engagement_rate=summary["engagement_rate"],
+            interactions=summary["interactions"],
+            retention_pct=summary["retention_pct"],
+            snapshot_count=summary["snapshot_count"],
+            baseline_views=summary["baseline_views"],
+            outperformance=summary["outperformance"],
+        )
+
+
+class BaselineOut(BaseModel):
+    """The account's median views per platform at each checkpoint."""
+
+    platform: str
+    #: Checkpoint age in hours -> median views.
+    by_checkpoint: dict[str, float]
+
+
+class ReportOut(BaseModel):
+    """Everything the learning loop consumes, in one response."""
+
+    postings: list[PostingSummaryOut]
+    baselines: list[BaselineOut]
+    #: True when at least one posting carries comparable data.
+    has_signal: bool

@@ -341,6 +341,208 @@ def doctor() -> None:
 config_app = typer.Typer(help="Inspect and modify AutoClip settings.", no_args_is_help=True)
 app.add_typer(config_app, name="config")
 
+track_app = typer.Typer(
+    help="Track where clips were posted and how they performed.", no_args_is_help=True
+)
+app.add_typer(track_app, name="track")
+
+
+def _get_clip_or_exit(clip_id: str):
+    from . import db
+    from .db import store
+
+    db.init()
+    clip = store.get_clip(clip_id)
+    if clip is None:
+        console.print(f"[red]Clip '{clip_id}' not found.[/red]")
+        raise typer.Exit(1)
+    return clip
+
+
+@track_app.command("post")
+def track_post(
+    clip_id: str = typer.Argument(..., help="The clip that was posted."),
+    platform: str = typer.Option(
+        ..., "--platform", "-p", help="tiktok, youtube, instagram, or other."
+    ),
+    url: str = typer.Option("", "--url", "-u", help="The posted URL, if any."),
+    caption: str = typer.Option("", "--caption", "-c", help="The caption actually used."),
+    posted_at: str = typer.Option("", "--at", help="ISO-8601 posting time. Defaults to now."),
+) -> None:
+    """Log that a clip was posted to a platform."""
+    from .db import store
+    from .db.models import Posting, new_id
+
+    _get_clip_or_exit(clip_id)
+    if platform not in ("tiktok", "youtube", "instagram", "other"):
+        console.print("[red]Unknown platform.[/red] Expected tiktok, youtube, instagram, or other.")
+        raise typer.Exit(2)
+
+    posting = Posting(
+        id=new_id(),
+        clip_id=clip_id,
+        platform=platform,  # type: ignore[arg-type]
+        url=url or None,
+        caption_used=caption or None,
+        posted_at=posted_at or None,
+    )
+    store.create_posting(posting)
+    console.print(
+        f"[green]Logged posting[/green] {posting.id} — {clip_id} on {platform}.\n"
+        f"Log metrics for it with [cyan]autoclip track stats {posting.id}[/cyan]."
+    )
+
+
+@track_app.command("stats")
+def track_stats(
+    posting_id: str = typer.Argument(..., help="The posting these metrics belong to."),
+    views: int = typer.Option(..., "--views", min=0, help="View count."),
+    likes: int = typer.Option(0, "--likes", min=0),
+    comments: int = typer.Option(0, "--comments", min=0),
+    shares: int = typer.Option(0, "--shares", min=0),
+    saves: int = typer.Option(0, "--saves", min=0),
+    retention: float = typer.Option(
+        None,
+        "--retention",
+        min=0,
+        max=100,
+        help="Platform-reported completion percentage, if shown.",
+    ),
+    watch: float = typer.Option(None, "--watch", min=0, help="Average watch seconds, if shown."),
+    captured_at: str = typer.Option("", "--at", help="ISO-8601 capture time. Defaults to now."),
+) -> None:
+    """Record one snapshot of a posting's metrics."""
+    from . import db
+    from .db import store
+    from .db.models import PerformanceSnapshot, new_id, utcnow
+
+    db.init()
+    if store.get_posting(posting_id) is None:
+        console.print(f"[red]Posting '{posting_id}' not found.[/red]")
+        raise typer.Exit(1)
+
+    snapshot = PerformanceSnapshot(
+        id=new_id(),
+        posting_id=posting_id,
+        views=views,
+        likes=likes,
+        comments=comments,
+        shares=shares,
+        saves=saves,
+        retention_pct=retention,
+        avg_watch_seconds=watch,
+        captured_at=captured_at or utcnow(),
+    )
+    store.add_snapshot(snapshot)
+    console.print(f"[green]Logged snapshot[/green] {snapshot.id} — {views} views.")
+
+
+@track_app.command("list")
+def track_list() -> None:
+    """Show every logged posting with its derived performance."""
+    from . import db
+    from .db import store
+    from .pipeline.outcomes import collect_outcomes, summary_for_posting
+
+    db.init()
+    postings = store.list_all_postings()
+    if not postings:
+        console.print("No postings logged yet. Start with [cyan]autoclip track post[/cyan].")
+        return
+
+    _, baselines = collect_outcomes()
+
+    table = Table(title="Posted clips", header_style="bold", title_justify="left")
+    table.add_column("Posting", width=16)
+    table.add_column("Clip", width=16)
+    table.add_column("Platform", width=10)
+    table.add_column("Views@ckpt", justify="right", width=10)
+    table.add_column("Baseline", justify="right", width=9)
+    table.add_column("vs base", justify="right", width=7)
+    table.add_column("Engagement", justify="right", width=10)
+
+    for posting in postings:
+        snapshots = store.list_snapshots(posting.id)
+        summary = summary_for_posting(posting, snapshots, baselines=baselines)
+        ratio = summary["outperformance"]
+        table.add_row(
+            posting.id,
+            posting.clip_id,
+            posting.platform,
+            f"{summary['views_at_checkpoint']:.0f}",
+            (f"{summary['baseline_views']:.0f}" if summary["baseline_views"] is not None else "-"),
+            f"{ratio:.2f}x" if ratio is not None else "-",
+            (
+                f"{summary['engagement_rate'] * 100:.1f}%"
+                if summary["engagement_rate"] is not None
+                else "-"
+            ),
+        )
+
+    console.print(table)
+
+
+@track_app.command("report")
+def track_report() -> None:
+    """Per-platform baselines and the ranking multipliers learned so far."""
+    from . import db
+    from .db import store
+    from .pipeline.outcomes import (
+        CHECKPOINT_HOURS,
+        build_few_shot_examples,
+        build_ranking_model,
+        collect_outcomes,
+    )
+
+    db.init()
+    outcomes, baselines = collect_outcomes()
+    postings = store.list_all_postings()
+    if not postings:
+        console.print(
+            "No postings logged yet. Performance learning starts once you log a "
+            "posting with [cyan]autoclip track post[/cyan] and add stats with "
+            "[cyan]autoclip track stats[/cyan]."
+        )
+        return
+
+    table = Table(title="Baselines (median views)", header_style="bold", title_justify="left")
+    table.add_column("Platform")
+    for hours in CHECKPOINT_HOURS:
+        table.add_column(f"{hours:.0f}h", justify="right")
+    for platform, per_checkpoint in baselines.items():
+        table.add_row(
+            platform,
+            *(f"{per_checkpoint.get(hours, float('nan')):.0f}" for hours in CHECKPOINT_HOURS),
+        )
+    console.print(table)
+
+    model = build_ranking_model(outcomes, baselines)
+    if model.is_trivial:
+        console.print(
+            "\n[dim]Not enough comparable data yet — ranking still uses the LLM "
+            "score alone. Log snapshots for a few postings on the same platform.[/dim]"
+        )
+        return
+
+    multipliers = Table(title="Learned multipliers", header_style="bold", title_justify="left")
+    multipliers.add_column("Feature")
+    multipliers.add_column("Value", justify="right")
+    multipliers.add_column("Based on", justify="right")
+    for name, group in (
+        ("Caption style", model.style_multipliers),
+        ("Duration band", model.duration_multipliers),
+        ("Platform", model.platform_multipliers),
+    ):
+        for key, value in sorted(group.items()):
+            multipliers.add_row(f"{name}: {key}", f"{value:.2f}x", str(model.sample_count))
+    console.print(multipliers)
+
+    examples = build_few_shot_examples(outcomes, baselines)
+    if examples:
+        console.print("\n[bold]Prompt examples drawn from your history:[/bold]")
+        for example in examples:
+            console.print(f'  "{example.hook}" — {example.outcome_line}')
+
 
 @config_app.command("show")
 def config_show() -> None:

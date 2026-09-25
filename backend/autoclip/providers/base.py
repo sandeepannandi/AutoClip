@@ -134,6 +134,10 @@ class DetectionConfig:
     #: iterate on prompts without touching code.
     prompt_version: str = "highlight_v1"
     temperature: float = 0.3
+    #: Calibration examples drawn from the account's own posted-clip history,
+    #: pre-rendered as a prompt block. Empty when nothing has been logged or
+    #: learning is disabled — the prompt is then exactly as before.
+    few_shot_block: str = ""
 
 
 @dataclass
@@ -255,13 +259,19 @@ def render_window_prompt(window: TranscriptWindow, config: DetectionConfig) -> s
             f"({', '.join(window.speakers)}); speaker labels are shown inline.\n"
         )
 
+    # Few-shot calibration rides in the user message, after the framing and
+    # before the transcript, where models reliably attend to instructions.
+    few_shot = config.few_shot_block.strip()
+    few_shot_section = f"\n{few_shot}\n" if few_shot else ""
+
     return (
         f"Transcript section, words {window.first_word} to {window.last_word}.\n"
         f"Each word is tagged with its index as [index]word.\n"
         f"{speaker_note}\n"
         f"Clip length must be between {config.min_duration_s:.0f} and "
         f"{config.max_duration_s:.0f} seconds.\n"
-        f"Return at most {config.max_clips} clips.\n\n"
+        f"Return at most {config.max_clips} clips.\n"
+        f"{few_shot_section}\n"
         f"---\n{window.text}\n---\n\n"
         "Respond with ONLY a JSON object matching the schema. No prose, no markdown fences."
     )

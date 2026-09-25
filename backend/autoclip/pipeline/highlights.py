@@ -15,9 +15,11 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+from ..config import load as load_settings
 from ..db.models import Clip, new_id
 from ..providers import ClipCandidate, DetectionConfig, LLMProvider, TranscriptWindow
 from . import boundaries
+from .outcomes import ranking_model_from_db, rerank_clips
 from .prepare import Silence
 from .transcript import Transcript
 
@@ -249,6 +251,25 @@ def build_clips(
     clips = _dedupe_clips(clips)
     clips.sort(key=lambda c: c.score, reverse=True)
     clips = clips[: config.max_clips]
+
+    # Outcome learning: logged posting history may reorder the finalists. With
+    # no history (or a trivial model) this is a no-op, so first-run behaviour
+    # is exactly the LLM-score order.
+    model = None
+    if load_settings().tracking.learn_from_outcomes:
+        try:
+            model = ranking_model_from_db(
+                min_snapshots=load_settings().tracking.min_snapshots_for_signal
+            )
+        except Exception:
+            log.exception("Ranking model build failed; keeping LLM-score order.")
+    if model is not None and not model.is_trivial:
+        clips = rerank_clips(clips, model)
+        log.info(
+            "Reordered finalists using %d logged posting(s): %s",
+            model.sample_count,
+            ", ".join(f"{k}={v:.2f}" for k, v in model.style_multipliers.items()),
+        )
 
     for rank, clip in enumerate(clips, start=1):
         clip.rank = rank

@@ -161,6 +161,59 @@ export interface Settings {
   keys_present: Record<string, boolean>
 }
 
+export type Platform = 'tiktok' | 'youtube' | 'instagram' | 'other'
+
+export interface Posting {
+  id: string
+  clip_id: string
+  platform: Platform
+  url: string | null
+  caption_used: string | null
+  notes: string | null
+  posted_at: string | null
+  created_at: string
+}
+
+export interface Snapshot {
+  id: string
+  posting_id: string
+  captured_at: string
+  views: number
+  likes: number
+  comments: number
+  shares: number
+  saves: number
+  avg_watch_seconds: number | null
+  retention_pct: number | null
+}
+
+/** Payload for logging a snapshot; omitted/null captured_at means "now". */
+export type SnapshotPayload = Omit<Snapshot, 'id' | 'posting_id' | 'captured_at'> & {
+  captured_at?: string | null
+}
+
+export interface PostingSummary extends Posting {
+  checkpoint_hours: number
+  views_at_checkpoint: number
+  engagement_rate: number | null
+  interactions: number
+  retention_pct: number | null
+  snapshot_count: number
+  baseline_views: number | null
+  outperformance: number | null
+}
+
+export interface Baseline {
+  platform: string
+  by_checkpoint: Record<string, number>
+}
+
+export interface TrackingReport {
+  postings: PostingSummary[]
+  baselines: Baseline[]
+  has_signal: boolean
+}
+
 export interface SystemStatus {
   ready: boolean
   python_version: string
@@ -319,6 +372,31 @@ export const api = {
     request<void>(`/api/settings/secrets/${key}`, { method: 'DELETE' }),
 
   mediaUrl: (jobId: string) => `/api/jobs/${jobId}/media`,
+
+  createPosting: (clipId: string, payload: Omit<Posting, 'id' | 'clip_id' | 'created_at'>) =>
+    request<Posting>(`/api/clips/${clipId}/postings`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  listPostings: (clipId: string) => request<Posting[]>(`/api/clips/${clipId}/postings`),
+
+  deletePosting: (postingId: string) =>
+    request<void>(`/api/postings/${postingId}`, { method: 'DELETE' }),
+
+  addSnapshot: (postingId: string, payload: SnapshotPayload) =>
+    request<Snapshot>(`/api/postings/${postingId}/snapshots`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
+  listSnapshots: (postingId: string) =>
+    request<Snapshot[]>(`/api/postings/${postingId}/snapshots`),
+
+  clipPerformance: (clipId: string) =>
+    request<PostingSummary[]>(`/api/clips/${clipId}/performance`),
+
+  trackingReport: () => request<TrackingReport>('/api/tracking/report'),
 }
 
 /** Format seconds as m:ss, or h:mm:ss past an hour. */

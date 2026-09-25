@@ -9,7 +9,10 @@ Pipeline for one clip:
 5. Per shot, pick a strategy — TRACK, WIDE, or GENERAL.
 6. Build a raw crop path, drive it through the lazy-follow (a hysteresis
    dead-band that parks the camera while the speaker stays in frame centre
-   and only chases — slowly — when they genuinely leave), and emit segments.
+   and only chases — slowly — when they genuinely leave; while parked it
+   settles toward the subject at an invisible ~1 px/s so the resting frame
+   ends centred rather than wherever the last chase happened to stop), and
+   emit segments.
 
 The quality bar is "never jarring": no visible jitter, no cut-off faces, the
 speaker on screen for essentially all of their speaking time. Every default here
@@ -20,6 +23,7 @@ frame that is always correct and always moving.
 from __future__ import annotations
 
 import logging
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -54,9 +58,16 @@ __all__ = [
 #: composed without leaving the chin tight to the bottom edge.
 EYE_LINE_RATIO = 0.38
 
-#: A face wider than this fraction of the crop is already a close-up; don't
-#: track it, lock the frame.
-LOCK_IF_FACE_WIDER_THAN = 0.55
+#: A subject whose ideal framing stays within this span for the whole shot is
+#: genuinely static and is better locked than tracked. Kept just above the
+#: dead zone so detection noise on a still subject reads as "barely moves",
+#: not "never moves".
+LOCK_IF_SPREAD_BELOW_PX = 40.0
+
+#: Fraction of samples trimmed from each end when measuring a shot's spread,
+#: so one or two mis-detections on an otherwise still subject cannot inflate
+#: the spread and wrongly force a tracked (moving) framing.
+SPREAD_TRIM_FRACTION = 0.1
 
 #: If detected faces span more than this fraction of the crop width, no crop can
 #: hold them and we fall back to a fitted (blurred-background) frame.
@@ -272,7 +283,14 @@ def _track_segment(
     crop_h: int,
     config: ReframeConfig,
 ) -> CropSegment:
-    """Frame a single subject, tracking them or locking on if they barely move."""
+    """Frame a single subject, tracking them or locking on if they barely move.
+
+    Close-ups are *not* locked. A locked close-up is the worst off-centre
+    offender: the mean position averages out the subject's drift, so a talking
+    head that shifts while speaking gets frozen slightly off-centre with no way
+    to correct it. Tracking a close-up costs nothing — the lazy-follow's dead
+    band keeps the frame parked while the subject stays put.
+    """
     observations = track.observations_between(start_s, end_s)
     if not observations:
         return _general_segment(
@@ -293,18 +311,24 @@ def _track_segment(
         for o in observations
     ]
 
-    mean_face_width = sum(o.width for o in observations) / len(observations)
-    spread_x = max(x for _, x, _ in raw) - min(x for _, x, _ in raw)
+    # Spread is measured robustly (a trimmed range, not max-min): a single
+    # mis-detection on a still subject must not inflate the spread and wrongly
+    # force a tracked framing. The same outlier-robustness the median lock
+    # position buys has to apply to the lock *decision* too.
+    spread_x = _trimmed_spread([x for _, x, _ in raw])
+    spread_y = _trimmed_spread([y for _, _, y in raw])
 
-    # A close-up, or a subject who barely moves, is better locked than tracked.
+    # A subject who barely moves is better locked than tracked — but locked at
+    # the median of where they actually were, not the mean. The median is
+    # robust to detection outliers, which otherwise pull a mean-locked frame
+    # off the subject for the whole shot.
     should_lock = (
-        mean_face_width > crop_w * LOCK_IF_FACE_WIDER_THAN
-        or spread_x < (config.smoothing or SmoothingConfig()).dead_zone_px
-    )
+        spread_x < LOCK_IF_SPREAD_BELOW_PX and spread_y < LOCK_IF_SPREAD_BELOW_PX
+    ) or len(raw) < 3
 
-    if should_lock or len(raw) < 3:
-        x = sum(item[1] for item in raw) / len(raw)
-        y = sum(item[2] for item in raw) / len(raw)
+    if should_lock:
+        x = statistics.median(item[1] for item in raw)
+        y = statistics.median(item[2] for item in raw)
         keyframes = [CropKeyframe(t=start_s, x=x, y=y)]
     else:
         smoothing = config.smoothing or SmoothingConfig()
@@ -419,6 +443,22 @@ def _general_segment(
         strategy=Strategy.GENERAL,
         zoom=GENERAL_ZOOM,
     )
+
+
+def _trimmed_spread(values: list[float]) -> float:
+    """Range of the middle ``1 - 2*SPREAD_TRIM_FRACTION`` of ``values``.
+
+    Max-minus-min is hostage to a single bad detection: one frame where the
+    landmarker jumps reads as "the subject moved" and downgrades a lockable
+    still shot to a tracked one. Trimming 10% off each end tolerates exactly
+    that noise. Fewer than three samples carry no shape information; they
+    report zero spread, which reads as lockable.
+    """
+    if len(values) < 3:
+        return 0.0
+    ordered = sorted(values)
+    trim = int(SPREAD_TRIM_FRACTION * (len(ordered) - 1))
+    return ordered[-1 - trim] - ordered[trim]
 
 
 def _clamp(value: float, low: float, high: float) -> float:
