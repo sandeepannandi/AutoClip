@@ -106,6 +106,58 @@ class TestRefine:
         assert result.start_s >= 0.0
 
 
+class TestDurationTarget:
+    """A too-short candidate extends toward the band's middle, not its floor.
+
+    Stopping at the first sentence end past the minimum makes every clip
+    cluster just above the floor; the walk should continue while the next
+    sentence end lands nearer the target in the middle of the band.
+    """
+
+    def test_short_candidate_extends_past_the_minimum_toward_the_middle(
+        self, transcript: Transcript
+    ) -> None:
+        # Sentence ends from word 0 land at 4.9s, 9.9s, ..., 24.9s, ... With a
+        # 20-62 band the first qualifying end is 24.9s, but 34.9/39.9s sit
+        # nearer the 43.1s target — the clip must not stop at 24.9s.
+        result = boundaries.refine(transcript, 0, 29, min_duration_s=20.0, max_duration_s=62.0)
+
+        assert result is not None
+        # 44.9s of speech + the 0.35s fallback tail.
+        assert result.duration_s == pytest.approx(45.25)
+
+    def test_walk_stops_once_the_target_is_reached(self, transcript: Transcript) -> None:
+        # 20-40 band: target 31s. Ends run 24.9, 29.9, 34.9 — the clip takes
+        # 34.9s, the first end at or past the target, not the last that fits.
+        result = boundaries.refine(transcript, 0, 29, min_duration_s=20.0, max_duration_s=40.0)
+
+        assert result is not None
+        assert result.duration_s == pytest.approx(34.9 + 0.35)
+
+    def test_target_never_pushes_a_clip_over_the_ceiling(self, transcript: Transcript) -> None:
+        # 20-30 band: target 25.5s. The walk takes 29.9s — inside the band —
+        # rather than the 24.9s floor-hugger; the tail pushes it to 30.25s and
+        # the post-alignment ceiling check clamps it back to exactly 30s.
+        result = boundaries.refine(transcript, 0, 29, min_duration_s=20.0, max_duration_s=30.0)
+
+        assert result is not None
+        assert result.duration_s == pytest.approx(30.0)
+
+    def test_default_band_yields_a_clip_near_the_50_60s_spot(self, transcript: Transcript) -> None:
+        # The 50s fixture against the new 48-62 defaults: the whole transcript
+        # becomes one clip sitting just inside the band.
+        result = boundaries.refine(transcript, 0, 99)
+
+        assert result is not None
+        assert 48.0 <= result.duration_s <= 62.0
+
+    def test_returns_none_when_no_candidate_can_reach_the_band(
+        self, transcript: Transcript
+    ) -> None:
+        # Starting at word 30 only 35s of material remain — under the 48s floor.
+        assert boundaries.refine(transcript, 30, 99) is None
+
+
 class TestSilenceAlignment:
     def test_start_lands_inside_a_nearby_silence(self) -> None:
         # Speech begins at 10.0; silence runs 9.4-10.0.

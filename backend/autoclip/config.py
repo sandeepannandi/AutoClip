@@ -66,8 +66,11 @@ class WhisperSettings(BaseModel):
 
 
 class ClipSettings(BaseModel):
-    min_duration_s: float = 20.0
-    max_duration_s: float = 90.0
+    #: The 48-62 band aims every clip at the 50-60s short-form sweet spot; a
+    #: little slack on each side keeps silence-snapping from discarding good
+    #: candidates that land just outside.
+    min_duration_s: float = 48.0
+    max_duration_s: float = 62.0
     max_clips: int = 10
 
 

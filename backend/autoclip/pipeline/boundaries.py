@@ -44,6 +44,12 @@ SILENCE_TAIL_S = 0.28
 #: detection has hysteresis, and the true edge sits slightly inside.
 SILENCE_MARGIN_S = 0.04
 
+#: When a candidate is shorter than the minimum, walk forward to the sentence
+#: boundary closest to this target rather than stopping at the first one past
+#: the minimum — otherwise every clip clusters just above the floor and none
+#: lands in the meaty middle of the allowed band.
+DURATION_TARGET_FRACTION = 0.55
+
 
 @dataclass
 class Boundary:
@@ -63,8 +69,8 @@ def refine(
     end_word: int,
     *,
     silences: list[Silence] | None = None,
-    min_duration_s: float = 20.0,
-    max_duration_s: float = 90.0,
+    min_duration_s: float = 48.0,
+    max_duration_s: float = 62.0,
 ) -> Boundary | None:
     """Refine a proposed word range into a cuttable boundary.
 
@@ -192,14 +198,23 @@ def _clamp_duration(
                 return None
 
     if duration_at(end_word) < min_duration_s:
+        # Too short: walk forward through sentence boundaries. Take the first
+        # one that clears the floor, but keep going while the next sentence end
+        # still lands nearer the target — a clip in the middle of the allowed
+        # band holds a complete thought instead of a truncated one.
+        target_s = min_duration_s + DURATION_TARGET_FRACTION * (max_duration_s - min_duration_s)
         last_index = len(transcript.words) - 1
         for candidate in range(end_word + 1, last_index + 1):
             if duration_at(candidate) > max_duration_s:
                 break
             if transcript.words[candidate].ends_sentence:
-                end_word = candidate
-                if duration_at(end_word) >= min_duration_s:
-                    break
+                candidate_duration = duration_at(candidate)
+                if candidate_duration >= min_duration_s:
+                    end_word = candidate
+                    if candidate_duration >= target_s:
+                        break
+                else:
+                    end_word = candidate
 
     duration = duration_at(end_word)
     if duration < min_duration_s or duration > max_duration_s:

@@ -126,8 +126,9 @@ class TranscriptWindow:
 
 @dataclass
 class DetectionConfig:
-    min_duration_s: float = 20.0
-    max_duration_s: float = 90.0
+    # Defaults mirror ClipSettings in config.py: the 50-60s short-form band.
+    min_duration_s: float = 48.0
+    max_duration_s: float = 62.0
     max_clips: int = 10
     language: str = ""
     #: Prompt file stem in ``autoclip/prompts/``. Versioned so contributors can

@@ -253,7 +253,7 @@ function AdvancedOptions({
               <NumberField
                 label="Min length (s)"
                 value={overrides.min_duration_s}
-                placeholder="20"
+                placeholder="48"
                 min={5}
                 max={300}
                 onChange={(v) => set('min_duration_s', v)}
@@ -261,7 +261,7 @@ function AdvancedOptions({
               <NumberField
                 label="Max length (s)"
                 value={overrides.max_duration_s}
-                placeholder="90"
+                placeholder="62"
                 min={5}
                 max={300}
                 onChange={(v) => set('max_duration_s', v)}
