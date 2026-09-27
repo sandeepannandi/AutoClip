@@ -121,6 +121,18 @@ class ExportSettings(BaseModel):
     #: Default colour grade applied to exports ("none", "warm", "punchy",
     #: "cool", "film"). Per-clip choices in the review screen override it.
     color_grade: str = "none"
+    #: Speed through detected silences instead of playing them at 1x. Dead air
+    #: is the #1 retention killer on feeds; speeding (not cutting) keeps room
+    #: tone and breaths so nothing reads as an edit. See pipeline/tighten.py.
+    tighten_silences: bool = True
+    #: Playback speed inside tightened silence.
+    silence_speed: float = 4.0
+    #: Gaps shorter than this stay at 1x — sub-half-second pauses are the
+    #: natural rhythm of speech, not dead air.
+    min_silence_s: float = 0.5
+    #: Air kept at normal speed on each side of a tightened gap, so the
+    #: fast-forward transition never sits flush against a word.
+    keep_silence_s: float = 0.12
 
 
 class Settings(BaseModel):

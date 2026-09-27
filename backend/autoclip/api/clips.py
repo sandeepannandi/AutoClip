@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from pathlib import Path
@@ -16,6 +17,7 @@ from ..db import store
 from ..db.models import Export, new_id
 from ..pipeline import captions as captions_module
 from ..pipeline import export as export_module
+from ..pipeline.prepare import Silence
 from ..pipeline.reframe.croppath import CropPath, centre_crop
 from ..pipeline.runner import JobWorkspace
 from ..pipeline.transcript import Transcript, Word
@@ -34,6 +36,18 @@ log = logging.getLogger(__name__)
 _COLOUR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 router = APIRouter(prefix="/api", tags=["clips"])
+
+
+def _load_silences(workspace: JobWorkspace) -> list[Silence]:
+    """The job's detected silences, for export-time silence tightening."""
+    if not workspace.silences.exists():
+        return []
+    try:
+        raw = json.loads(workspace.silences.read_text(encoding="utf-8"))
+        return [Silence(**item) for item in raw]
+    except (OSError, ValueError, TypeError):
+        log.warning("Could not read silences for job %s; exporting untightened.", workspace.root)
+        return []
 
 
 def _clip_out(clip) -> ClipOut:
@@ -263,6 +277,7 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         caption_position=edit.caption_position if edit else None,
         color_grade=payload.color_grade or settings.export.color_grade,
         primary_color=edit.caption_color if edit else None,
+        silences=_load_silences(workspace),
     )
 
     try:

@@ -14,7 +14,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from autoclip.config import ExportSettings
-from autoclip.pipeline import captions, export, ffmpeg
+from autoclip.pipeline import captions, export, ffmpeg, tighten
+from autoclip.pipeline.prepare import Silence
 from autoclip.pipeline.reframe.croppath import (
     CropKeyframe,
     CropPath,
@@ -114,6 +115,39 @@ class TestSingleSegmentRender:
         assert (info.width, info.height) == (1080, 1920)
         assert info.has_audio
         assert info.duration_s == pytest.approx(5.0, abs=0.35)
+
+    def test_silence_tightening_shortens_the_output(self, source_video, words, tmp_path) -> None:
+        # The fixture clip runs 2.0-7.0s. A "silence" covering 3.0-4.5s (past
+        # the hook protection window) tightens at 4x with 0.12s margins: 1.26s
+        # of source plays in 0.315s, so the render lands ~0.95s shorter than
+        # the untightened 5s. Video and audio must agree on the length.
+        silences = [Silence(start=5.0, end=6.5)]
+        destination = tmp_path / "tightened.mp4"
+        request = make_request(
+            source_video,
+            destination,
+            centre_crop(SOURCE_W, SOURCE_H, 5.0),
+            words,
+            silences=silences,
+        )
+        settings = ExportSettings(tighten_silences=True)
+
+        export.export_clip(request, work_dir=tmp_path / "work", settings=settings)
+
+        info = ffmpeg.probe(destination)
+        plan = tighten.build_plan(2.0, 7.0, silences)
+        assert info.duration_s == pytest.approx(plan.output_duration_s, abs=0.35)
+        assert info.duration_s < 4.5  # clearly shorter than the 5s original
+        assert info.has_audio
+
+        # Same request without silences must stay the full 5s.
+        plain = tmp_path / "plain.mp4"
+        export.export_clip(
+            make_request(source_video, plain, centre_crop(SOURCE_W, SOURCE_H, 5.0), words),
+            work_dir=tmp_path / "work",
+            settings=settings,
+        )
+        assert ffmpeg.probe(plain).duration_s == pytest.approx(5.0, abs=0.35)
 
     @pytest.mark.parametrize("ratio", ["9:16", "1:1", "16:9"])
     def test_every_ratio_renders(self, source_video, words, tmp_path, ratio: str) -> None:

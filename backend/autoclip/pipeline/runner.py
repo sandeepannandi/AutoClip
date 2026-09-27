@@ -179,7 +179,7 @@ class PipelineRunner:
             clips = await self._stage_highlights(transcript, silences)
             crop_paths = self._stage_reframe(clips, transcript)
             self._stage_captions(clips, transcript)
-            self._stage_export(clips, transcript, crop_paths)
+            self._stage_export(clips, transcript, crop_paths, silences=silences)
         except JobCancelled:
             store.update_job(self.job.id, status="cancelled", finished_at=utcnow(), progress=0.0)
             raise
@@ -352,6 +352,7 @@ class PipelineRunner:
         clips: list[Clip],
         transcript: Transcript,
         crop_paths: dict[str, CropPath],
+        silences: list[Silence] | None = None,
     ) -> None:
         stage = Stage.EXPORT
         self._check_cancelled()
@@ -386,6 +387,7 @@ class PipelineRunner:
                     (edit.color_grade if edit else None) or self.settings.export.color_grade
                 ),
                 primary_color=edit.caption_color if edit else None,
+                silences=silences,
             )
 
             def clip_progress(fraction: float, i: int = index) -> None:
