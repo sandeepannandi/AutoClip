@@ -33,6 +33,20 @@ OVERLAP_S = 60
 #: Two candidates covering this much of the same words are the same clip.
 DEDUPE_IOU = 0.4
 
+#: Ranking blends the model's overall clip score with its independent read on
+#: the opening line's pull. Weighted toward the overall score — the hook is
+#: the single biggest predictor of feed performance, but a strong hook on a
+#: clip with no payoff still underperforms. Outcome learning re-ranks the
+#: finalists with real posting data after this, so this blend only orders
+#: what the model produced.
+ENGAGEMENT_WEIGHT = 0.3
+QUALITY_WEIGHT = 0.7
+
+
+def engagement_key(score: int, hook_strength: int) -> float:
+    """Blended engagement ranking value in [0, 100]."""
+    return QUALITY_WEIGHT * score + ENGAGEMENT_WEIGHT * hook_strength
+
 #: Videos at least this long get the full clip budget; shorter videos get the
 #: short-video budget. A 10-minute video rarely holds ten distinct highlights:
 #: asking the model for ten makes it stretch, and the extra candidates are
@@ -245,6 +259,7 @@ def build_clips(
 
     clips: list[Clip] = []
     for candidate in deduped:
+        hook_start = _verified_hook_start(transcript, candidate)
         boundary = boundaries.refine(
             transcript,
             candidate.start_word_index,
@@ -252,6 +267,7 @@ def build_clips(
             silences=silences or [],
             min_duration_s=config.min_duration_s,
             max_duration_s=config.max_duration_s,
+            preferred_start_word=hook_start,
         )
         if boundary is None:
             log.debug(
@@ -276,12 +292,13 @@ def build_clips(
                 hook=candidate.hook.strip(),
                 score=candidate.score,
                 reason=candidate.reason.strip(),
+                hook_strength=candidate.hook_strength,
             )
         )
 
     # Refinement can move edges enough that two survivors now overlap.
     clips = _dedupe_clips(clips)
-    clips.sort(key=lambda c: c.score, reverse=True)
+    clips.sort(key=lambda c: engagement_key(c.score, c.hook_strength), reverse=True)
     clips = clips[: config.max_clips]  # budget already scaled in detect()
 
     # Outcome learning: logged posting history may reorder the finalists. With
@@ -318,7 +335,9 @@ def dedupe(
     Overlapping windows mean the same moment is often proposed two or three
     times, sometimes with slightly different edges. Highest score wins.
     """
-    ordered = sorted(candidates, key=lambda c: c.score, reverse=True)
+    ordered = sorted(
+        candidates, key=lambda c: engagement_key(c.score, c.hook_strength), reverse=True
+    )
     kept: list[ClipCandidate] = []
 
     for candidate in ordered:
@@ -339,7 +358,7 @@ def dedupe(
 
 
 def _dedupe_clips(clips: list[Clip], *, iou_threshold: float = DEDUPE_IOU) -> list[Clip]:
-    ordered = sorted(clips, key=lambda c: c.score, reverse=True)
+    ordered = sorted(clips, key=lambda c: engagement_key(c.score, c.hook_strength), reverse=True)
     kept: list[Clip] = []
     for clip in ordered:
         if any(
@@ -358,3 +377,54 @@ def _iou(a_start: int, a_end: int, b_start: int, b_end: int) -> float:
         return 0.0
     union = (a_end - a_start + 1) + (b_end - b_start + 1) - intersection
     return intersection / union if union else 0.0
+
+
+def _verified_hook_start(transcript: Transcript, candidate: ClipCandidate) -> int | None:
+    """The candidate's claimed hook start, when the transcript corroborates it.
+
+    The model's own ``hook_word_index`` is the strongest signal — an index
+    into the same word-tagged transcript it just read. When it is absent (v1
+    prompts) or points outside the candidate's span, the verbatim ``hook``
+    quote is fuzzy-matched against the words near the proposed start instead.
+    A hook that matches neither is treated as hallucinated and ignored:
+    a wrong snap is worse than no snap.
+    """
+    first = candidate.start_word_index
+    last = candidate.end_word_index
+
+    claimed = candidate.hook_word_index
+    if claimed is not None and first <= claimed <= last:
+        return claimed
+
+    hook = candidate.hook.strip().lower()
+    if not hook:
+        return None
+
+    # Compare against windows of the same word count near the proposed start.
+    # The hook quote is a few words; the model was told to quote verbatim, but
+    # punctuation and casing drift, so compare on stripped tokens.
+    def tokens(text: str) -> str:
+        return "".join(ch for ch in text.lower() if ch.isalnum() or ch.isspace()).strip()
+
+    wanted = tokens(hook)
+    if not wanted:
+        return None
+
+    hook_word_count = max(1, len(hook.split()))
+    search_from = max(0, first - 3)
+    search_to = min(len(transcript.words) - hook_word_count, first + 8)
+
+    for index in range(search_from, search_to + 1):
+        window_text = tokens(
+            transcript.text_between(index, min(index + hook_word_count - 1, last))
+        )
+        if wanted in window_text:
+            return index
+
+    log.warning(
+        "Hook %r for candidate %d-%d not found near the start; ignoring it.",
+        candidate.hook.strip(),
+        first,
+        last,
+    )
+    return None

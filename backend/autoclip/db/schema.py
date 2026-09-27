@@ -140,6 +140,21 @@ def _migration_v4(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v6(conn: sqlite3.Connection) -> None:
+    """Persist the model's hook-strength read on each clip.
+
+    Kept beside ``score`` so ranking blends and the review UI can use it; the
+    default is the same neutral 50 the detection schema uses when a model
+    never returned one.
+    """
+    conn.executescript(
+        """
+        ALTER TABLE clips
+            ADD COLUMN hook_strength INTEGER NOT NULL DEFAULT 50;
+        """
+    )
+
+
 def _migration_v1(conn: sqlite3.Connection) -> None:
     conn.executescript(_V1)
 
@@ -193,6 +208,7 @@ MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_v3,
     _migration_v4,
     _migration_v5,
+    _migration_v6,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

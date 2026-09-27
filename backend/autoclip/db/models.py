@@ -139,6 +139,9 @@ class Clip:
     title: str = ""
     hook: str = ""
     score: int = 0
+    #: The model's independent read on how hard the opening line pulls, 0-100.
+    #: Ranked against ``score`` (blended) and shown in the review UI.
+    hook_strength: int = 50
     reason: str = ""
     status: ClipStatus = "candidate"
     user_trimmed: bool = False
@@ -161,6 +164,7 @@ class Clip:
             title=row["title"],
             hook=row["hook"],
             score=row["score"],
+            hook_strength=row["hook_strength"],
             reason=row["reason"],
             status=row["status"],
             user_trimmed=bool(row["user_trimmed"]),

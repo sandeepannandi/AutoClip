@@ -149,6 +149,8 @@ class ClipOut(BaseModel):
     hook: str
     caption_position: models.CaptionPosition = "bottom"
     score: int
+    #: The model's independent read on the opening line's pull, 0-100.
+    hook_strength: int = 50
     reason: str
     status: str
     user_trimmed: bool
@@ -183,6 +185,7 @@ class ClipOut(BaseModel):
             hook=clip.hook,
             caption_position=edit.caption_position if edit else "bottom",
             score=clip.score,
+            hook_strength=clip.hook_strength,
             reason=clip.reason,
             status=clip.status,
             user_trimmed=clip.user_trimmed,

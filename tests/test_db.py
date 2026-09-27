@@ -207,6 +207,29 @@ class TestClips:
 
         assert store.list_clips(job.id)[0].duration_s == pytest.approx(45.0)
 
+    def test_hook_strength_round_trips(self, job: Job) -> None:
+        store.replace_clips(job.id, [self._clip(job, 1, hook_strength=93)])
+
+        listed = store.list_clips(job.id)
+
+        assert listed[0].hook_strength == 93
+
+    def test_hook_strength_defaults_when_absent(self, job: Job) -> None:
+        # A clip produced before hook-strength detection existed reads back as
+        # the neutral default, never zero.
+        with db.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO clips (id, job_id, rank, start_s, end_s, title, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (new_id(), job.id, 1, 0.0, 50.0, "Legacy", "2026-01-01T00:00:00+00:00"),
+            )
+
+        listed = store.list_clips(job.id)
+
+        assert listed[0].hook_strength == 50
+
     def test_update_clip_records_a_trim(self, job: Job) -> None:
         clip = self._clip(job, 1)
         store.replace_clips(job.id, [clip])

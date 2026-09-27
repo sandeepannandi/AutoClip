@@ -63,6 +63,10 @@ class ClipCandidate(BaseModel):
     reason: str = ""
     #: The model's read on how hard the opening line grabs a stranger.
     hook_strength: int = Field(default=50, ge=0, le=100)
+    #: Index of the word the gripping opening line begins at, when the model
+    #: can point at one. Optional so older prompt versions and sloppy models
+    #: keep working; highlight detection treats it as a hint, never a contract.
+    hook_word_index: int | None = Field(default=None, ge=0)
     #: The words the model thinks deserve visual emphasis in the captions.
     emphasis_words: list[str] = Field(default_factory=list)
     #: The caption preset it believes matches the clip's energy.
@@ -132,8 +136,9 @@ class DetectionConfig:
     max_clips: int = 10
     language: str = ""
     #: Prompt file stem in ``autoclip/prompts/``. Versioned so contributors can
-    #: iterate on prompts without touching code.
-    prompt_version: str = "highlight_v1"
+    #: iterate on prompts without touching code. v2 asks for hook-first starts
+    #: (``hook_word_index``) instead of flat sentence openings.
+    prompt_version: str = "highlight_v2"
     temperature: float = 0.3
     #: Calibration examples drawn from the account's own posted-clip history,
     #: pre-rendered as a prompt block. Empty when nothing has been logged or

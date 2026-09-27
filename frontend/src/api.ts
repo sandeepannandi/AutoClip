@@ -65,6 +65,7 @@ export interface Clip {
   hook: string
   caption_position: CaptionPosition
   score: number
+  hook_strength: number
   reason: string
   status: ClipStatus
   user_trimmed: boolean

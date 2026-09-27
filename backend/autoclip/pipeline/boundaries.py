@@ -71,8 +71,16 @@ def refine(
     silences: list[Silence] | None = None,
     min_duration_s: float = 48.0,
     max_duration_s: float = 62.0,
+    preferred_start_word: int | None = None,
 ) -> Boundary | None:
     """Refine a proposed word range into a cuttable boundary.
+
+    ``preferred_start_word`` points at the hook — the gripping line the model
+    says the clip should open on. Sentence snapping still applies (a clip may
+    never open mid-thought), but when the hook sits inside a sentence that the
+    plain snap would move *earlier* past, the snap keeps the hook's sentence
+    instead. Only accepted when the resulting clip still fits the duration
+    band; otherwise the plain snap wins and the hook is dropped.
 
     Returns None when the range cannot be made to satisfy the duration
     constraints — a candidate that would need to be butchered is better dropped.
@@ -88,11 +96,15 @@ def refine(
     start_word = max(0, min(start_word, last_index))
     end_word = max(start_word, min(end_word, last_index))
 
-    start_word = snap_start_to_sentence(transcript, start_word)
+    plain_start = snap_start_to_sentence(transcript, start_word)
     end_word = snap_end_to_sentence(transcript, end_word)
 
-    if end_word <= start_word:
+    if end_word <= plain_start:
         return None
+
+    start_word = _reconcile_hook_start(
+        transcript, plain_start, end_word, preferred_start_word, min_duration_s, max_duration_s
+    )
 
     clamped = _clamp_duration(transcript, start_word, end_word, min_duration_s, max_duration_s)
     if clamped is None:
@@ -110,6 +122,48 @@ def refine(
     return Boundary(
         start_s=max(0.0, start_s), end_s=end_s, start_word=start_word, end_word=end_word
     )
+
+
+def _reconcile_hook_start(
+    transcript: Transcript,
+    plain_start: int,
+    end_word: int,
+    preferred_start_word: int | None,
+    min_duration_s: float,
+    max_duration_s: float,
+) -> int:
+    """Keep the hook's sentence when the plain snap would have skipped past it.
+
+    The model points at the gripping line; the plain sentence snap, preferring
+    earlier starts, can land one or more sentences before it. When the
+    preference is a valid sentence start inside the clip's range and the clip
+    from there still fits the duration band, the hook wins — that is the whole
+    point of asking for it. Any doubt (unusable index, unusable duration)
+    falls back to the plain snap.
+    """
+    if preferred_start_word is None:
+        return plain_start
+
+    last_index = len(transcript.words) - 1
+    hook = max(0, min(preferred_start_word, last_index))
+
+    # The hook must point at a real sentence start (or index 0, which always
+    # is one) and sit within the already-snapped clip span. A hook outside the
+    # span is the model pointing elsewhere; ignore it.
+    if hook < plain_start or hook > end_word:
+        return plain_start
+    if hook != 0 and not transcript.words[hook - 1].ends_sentence:
+        return plain_start
+
+    # Accept the hook only if the clip still fits from there.
+    start_s = transcript.words[hook].start
+    end_s = transcript.words[end_word].end
+    if end_s - start_s < min_duration_s or end_s - start_s > max_duration_s:
+        return plain_start
+
+    if hook != plain_start:
+        log.info("Snapped clip start to the hook at word %d (plain snap: %d).", hook, plain_start)
+    return hook
 
 
 # --------------------------------------------------------------------------
