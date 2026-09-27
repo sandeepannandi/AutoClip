@@ -222,6 +222,19 @@ class TestPromptInjection:
         # The examples sit between the instructions and the transcript.
         assert prompt.index("Examples") < prompt.index("[0]hi")
 
+    def test_prompt_aims_for_the_configured_clip_count(self) -> None:
+        # "At most N" reads as a cap and models return one or two clips; the
+        # prompt must ask for the budget as a target instead.
+        from autoclip.providers import DetectionConfig, TranscriptWindow
+        from autoclip.providers.base import render_window_prompt
+
+        window = TranscriptWindow(text="[0]hi", first_word=0, last_word=1)
+
+        prompt = render_window_prompt(window, DetectionConfig(max_clips=7))
+
+        assert "Find the 7 best clips" in prompt
+        assert "exactly 7 clips" in prompt
+
     def test_empty_block_leaves_the_prompt_unchanged(self) -> None:
         from autoclip.providers import DetectionConfig, TranscriptWindow
         from autoclip.providers.base import render_window_prompt
