@@ -147,7 +147,11 @@ excludes = [
     "pyannote",
     "nvidia",  # CUDA wheels must never leak into the CPU build
     "tkinter",
-    "matplotlib",
+    # NB: matplotlib must NOT be excluded. It looks like pure plotting
+    # dead-weight, but mediapipe.tasks.python.vision.drawing_utils imports it
+    # unconditionally at import time — excluding it broke `import mediapipe`
+    # inside the frozen exe, so face detection silently fell back to a static
+    # centre crop in every packaged build. Costs ~15 MB in the bundle.
     "IPython",
     "pytest",
 ]

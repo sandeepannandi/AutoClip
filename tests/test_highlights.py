@@ -55,6 +55,45 @@ def candidate(start: int, end: int) -> ClipCandidate:
     )
 
 
+class TestEffectiveMaxClips:
+    """The clip budget scales with video length; the setting is a ceiling."""
+
+    def test_short_video_gets_the_short_budget(self) -> None:
+        # 610 words at 0.5s each ~ 5 minutes of speech.
+        assert highlights.effective_max_clips(make_transcript(610), 10) == 4
+
+    def test_long_video_gets_the_full_budget(self) -> None:
+        # 3650 words at 0.5s each ~ 30.4 minutes.
+        assert highlights.effective_max_clips(make_transcript(3650), 10) == 10
+
+    def test_just_under_the_threshold_is_still_short(self) -> None:
+        # 3600 words ~ 29.9 minutes: under the 30-minute mark.
+        assert highlights.effective_max_clips(make_transcript(3600), 10) == 4
+
+    def test_configured_limit_is_a_ceiling_not_a_floor(self) -> None:
+        long_video = make_transcript(3650)
+        short_video = make_transcript(610)
+
+        assert highlights.effective_max_clips(long_video, 3) == 3
+        assert highlights.effective_max_clips(short_video, 3) == 3
+
+    async def test_detection_truncates_to_the_duration_scaled_budget(self) -> None:
+        # A model that proposes six candidates for a five-minute video gets
+        # cut to the short-video budget of four.
+        provider = FlakyProvider(
+            [[candidate(i, i + 8) for i in range(0, 48, 8)]], error="unused"
+        )
+
+        clips = await highlights.detect(
+            make_transcript(610),
+            provider,
+            DetectionConfig(min_duration_s=1.0, max_duration_s=60.0, max_clips=10),
+            job_id="j1",
+        )
+
+        assert len(clips) == 4
+
+
 class TestWindowFailureReporting:
     async def test_all_windows_failing_reports_the_real_errors(self) -> None:
         provider = FlakyProvider([], error="400 json_validate_failed: output truncated")

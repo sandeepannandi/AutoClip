@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 
 from ..config import load as load_settings
 from ..db.models import Clip, new_id
@@ -32,6 +33,14 @@ OVERLAP_S = 60
 #: Two candidates covering this much of the same words are the same clip.
 DEDUPE_IOU = 0.4
 
+#: Videos at least this long get the full clip budget; shorter videos get the
+#: short-video budget. A 10-minute video rarely holds ten distinct highlights:
+#: asking the model for ten makes it stretch, and the extra candidates are
+#: filler that ranks poorly anyway.
+LONG_VIDEO_THRESHOLD_S = 30 * 60.0
+SHORT_VIDEO_MAX_CLIPS = 4
+LONG_VIDEO_MAX_CLIPS = 10
+
 #: Hosted providers tolerate parallel windows; a local model is already
 #: saturating the GPU, so extra concurrency only adds contention.
 HOSTED_CONCURRENCY = 3
@@ -40,6 +49,24 @@ LOCAL_CONCURRENCY = 1
 
 class HighlightError(RuntimeError):
     """Highlight detection produced nothing usable."""
+
+
+def effective_max_clips(transcript: Transcript, configured_max_clips: int) -> int:
+    """Clip budget for this video.
+
+    The budget scales with how much material there is — 10 clips for a very
+    long video (30 minutes or more), 4 for a short one. The configured
+    ``max_clips`` (Settings → Max clips, or a per-run override) acts as the
+    ceiling: a user who asked for fewer than the budget still gets fewer, but
+    a short video never yields more than its budget no matter what the
+    setting says.
+    """
+    budget = (
+        LONG_VIDEO_MAX_CLIPS
+        if transcript.duration >= LONG_VIDEO_THRESHOLD_S
+        else SHORT_VIDEO_MAX_CLIPS
+    )
+    return min(configured_max_clips, budget)
 
 
 def build_windows(
@@ -134,6 +161,11 @@ async def detect(
     windows = build_windows(transcript)
     if not windows:
         raise HighlightError("The transcript is empty, so there is nothing to clip.")
+
+    # Scale the clip budget to the video's length before prompting, so the
+    # model is asked for (and the result truncated to) the same number.
+    config = replace(config, max_clips=effective_max_clips(transcript, config.max_clips))
+    log.info("Clip budget for this video: %d.", config.max_clips)
 
     log.info("Detecting highlights across %d window(s) with %s.", len(windows), provider.name)
 
@@ -250,7 +282,7 @@ def build_clips(
     # Refinement can move edges enough that two survivors now overlap.
     clips = _dedupe_clips(clips)
     clips.sort(key=lambda c: c.score, reverse=True)
-    clips = clips[: config.max_clips]
+    clips = clips[: config.max_clips]  # budget already scaled in detect()
 
     # Outcome learning: logged posting history may reorder the finalists. With
     # no history (or a trivial model) this is a no-op, so first-run behaviour
