@@ -333,10 +333,14 @@ def _track_segment(
     else:
         smoothing = config.smoothing or SmoothingConfig()
         # Lazy follow: the crop parks while the subject stays inside its band,
-        # so pacing around a centre won't re-frame every step. The band scales
-        # with the crop's tight dimension.
+        # so pacing around a centre won't re-frame every step. Each axis scales
+        # its band against its own crop dimension; the vertical band is tighter
+        # because a cut-off forehead reads as broken, an off-centre body
+        # doesn't. A jump or lunge trips the burst recovery on either axis.
         xs = lazy_follow([(t, x) for t, x, _ in raw], smoothing, reference_px=crop_w)
-        ys = lazy_follow([(t, y) for t, _, y in raw], smoothing, reference_px=crop_w)
+        ys = lazy_follow(
+            [(t, y) for t, _, y in raw], smoothing, reference_px=crop_h, vertical=True
+        )
         keyframes = [
             CropKeyframe(
                 t=t,

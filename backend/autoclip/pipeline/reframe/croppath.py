@@ -25,8 +25,10 @@ log = logging.getLogger(__name__)
 
 #: Cap on keyframes per segment. Beyond this the expression gets unwieldy and
 #: the extra precision is invisible — the path is smoothed and dead-zoned
-#: upstream, so adjacent keyframes differ by well under a pixel.
-MAX_KEYFRAMES_PER_SEGMENT = 48
+#: upstream, so adjacent keyframes differ by well under a pixel. Raised when
+#: clips moved to the 50-60s band: 48 keyframes over a minute is too coarse to
+#: describe a burst recovery, which moves fast and briefly by design.
+MAX_KEYFRAMES_PER_SEGMENT = 96
 
 #: Movement below this many pixels is dropped during decimation.
 KEYFRAME_EPSILON_PX = 1.0

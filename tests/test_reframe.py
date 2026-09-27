@@ -175,11 +175,15 @@ class TestLazyFollow:
         followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
         values = [v for _, v in followed]
 
-        # Velocity-clamped: the first chase step is capped at 220px/s * 0.2s = 44px.
-        assert followed[1][1] == pytest.approx(544.0, abs=1.0)
+        # The 200px departure trips the burst (33% of 600 >= the 180px burst
+        # threshold), so the first step eases 200 * (1 - e^(-0.2/0.35)) = 87px
+        # -- under the 140px burst cap -- instead of the calm chase's 44px.
+        assert followed[1][1] == pytest.approx(587.1, abs=1.0)
         steps = [abs(b - a) for (_, a), (_, b) in zip(followed[2:], followed[3:], strict=False)]
         assert max(steps) < 10.0
-        assert values[-1] > values[2]  # settling toward the subject, not away
+        # The burst overshoots the 550 hold and the settle then eases DOWN
+        # toward the subject's final 545 — closing on it, never away.
+        assert abs(values[-1] - 545.0) < abs(values[2] - 545.0)
 
     def test_parks_through_an_8_percent_drift(self) -> None:
         # 8% of the 600px crop width is 48px — inside the 84px follow band.
@@ -272,14 +276,82 @@ class TestLazyFollow:
         assert max(steps) < 5.0
 
     def test_chase_velocity_is_clamped(self) -> None:
-        # A detection glitch must never whip the frame across the shot.
+        # A huge error (detection glitch or a real jump out of frame) recovers
+        # through the burst path, which is still velocity-clamped -- just at
+        # the higher burst ceiling. Travel never exceeds it, and the camera
+        # stays far from the bogus 5000px target.
         samples = [(0.0, 0.0), (0.2, 5000.0), (0.4, 5000.0), (0.6, 5000.0)]
 
         followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
 
         for (t0, v0), (t1, v1) in zip(followed, followed[1:], strict=False):
-            assert abs(v1 - v0) <= self.CONFIG.max_velocity_px_s * (t1 - t0) + 1e-6
+            assert abs(v1 - v0) <= self.CONFIG.burst_velocity_px_s * (t1 - t0) + 1e-6
         assert followed[-1][1] < 1000
+
+    def test_single_sample_glitch_reverses_cleanly(self) -> None:
+        # A one-frame detection outlier must not fling the camera: it moves at
+        # most one burst step toward the bogus target, and when the target
+        # returns the burst chases straight back and the frame ends where it
+        # started.
+        samples = [(0.0, 0.0), (0.2, 5000.0), (0.4, 0.0), (0.6, 0.0), (0.8, 0.0)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+
+        # One burst step out (capped at 140px), then the burst chases straight
+        # back; with the samples given it is still mid-return, but most of the
+        # excursion has been undone and nothing ran away.
+        assert followed[1][1] == pytest.approx(140.0, abs=1.0)
+        assert followed[-1][1] < followed[1][1]
+        assert followed[-1][1] < 60.0
+
+    def test_burst_recovers_a_jump_far_faster_than_the_calm_chase(self) -> None:
+        # THE jump regression: the subject leaps 1200px (2x the crop) and
+        # holds. The burst must close most of the gap within ~0.8s; the old
+        # calm-only chase needed over 2s, leaving them out of frame.
+        samples = [(i * 0.2, 0.0) for i in range(2)] + [(i * 0.2, 1200.0) for i in range(2, 40)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+        values = [v for _, v in followed]
+
+        assert values[2] > 100.0  # already moving hard on the first burst step
+        # The first steps ride the burst velocity cap (140px per 0.2s sample).
+        assert values[6] == pytest.approx(700.0, abs=5.0)  # 0.8s in: 58% closed
+        assert values[9] > 1050.0  # 1.4s in: the ease has taken over, ~90% there
+        assert values[-1] == pytest.approx(1200.0, abs=30.0)  # fully recovered
+        # And the recovery is an ease, not a teleport: no step exceeds the
+        # burst ceiling (700px/s * 0.2s = 140px).
+        steps = [abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)]
+        assert max(steps) <= 140.0 + 1e-6
+
+    def test_burst_never_engages_on_a_moderate_drift(self) -> None:
+        # A 150px departure (25% of the crop) is inside the 180px burst
+        # threshold: the chase must stay at the calm rate, per-step under the
+        # calm cap.
+        samples = [(i * 0.2, 650.0) for i in range(40)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+
+        steps = [abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)]
+        assert max(steps) <= self.CONFIG.max_velocity_px_s * 0.2 + 1e-6
+        assert followed[-1][1] == pytest.approx(650.0, abs=10.0)
+
+    def test_vertical_band_is_tighter_than_horizontal(self) -> None:
+        # A cut-off forehead is worse than an off-centre body, so the same
+        # fractional offset wakes the vertical camera but not the horizontal
+        # one: a 66px offset (11% of 600) is outside the vertical wake (10%
+        # -> 60px) yet inside the horizontal one (14% -> 84px). The camera
+        # starts on the subject at 500; the subject then sits at 566.
+        samples = [(0.0, 500.0)] + [(i * 0.2, 566.0) for i in range(1, 11)]
+
+        horizontal = smoothing.lazy_follow(samples, self.CONFIG, reference_px=600.0)
+        vertical = smoothing.lazy_follow(
+            samples, self.CONFIG, reference_px=600.0, vertical=True
+        )
+
+        # In 2s the vertical chase has closed most of the gap; the horizontal
+        # axis only settles, which is far slower (measured 554 vs 532).
+        assert vertical[-1][1] > 550.0
+        assert horizontal[-1][1] < 540.0
 
     def test_single_sample_passes_through(self) -> None:
         assert smoothing.lazy_follow([(0.0, 100.0)], reference_px=600.0) == [(0.0, 100.0)]

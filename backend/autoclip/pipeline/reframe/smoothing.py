@@ -19,7 +19,12 @@ speaker tracking. Re-centering on the person is what makes a camera feel glued
 to them: the crop chases every drift, so the frame never rests. ``lazy_follow``
 holds the camera parked while the subject stays inside a margin, chases with a
 decelerating ease once they pass it, and returns to the near-centre band — the
-same bank-and-hold rhythm an operator uses.
+same bank-and-hold rhythm an operator uses. Beyond a large error threshold the
+chase switches to a *burst*: a shorter ease and a much higher velocity ceiling
+that recovers a subject who jumped or lunged out of frame in a few
+decelerating steps, reading as the camera jumping with them rather than
+snapping after. The vertical axis runs the same controller with a tighter wake
+band — a cut-off forehead is worse than an off-centre body.
 
 The park is not a freeze. While parked the camera *settles*: it eases toward
 the subject at a rate several times slower than a chase (tau 3.0s vs 0.6s). A
@@ -121,6 +126,33 @@ class SmoothingConfig:
     #: Narrower than ``follow_margin_ratio`` so the trigger never oscillates at
     #: the boundary.
     hold_margin_ratio: float = 0.04
+    #: Vertical wake band, as a fraction of the crop *height*. Tighter than the
+    #: horizontal band because a cut-off forehead reads as broken while an
+    #: off-centre body merely reads as composed differently. The vertical axis
+    #: gets its own band but shares the hold band, settle, and burst settings.
+    follow_margin_ratio_y: float = 0.10
+    #: Burst chase. When the subject's ideal framing is further than this
+    #: fraction of the reference dimension from the camera — a jump, a lean out
+    #: of frame, a detection dropout and reappearance — the chase switches from
+    #: the calm operator pan to a fast recovery: shorter tau and a much higher
+    #: velocity ceiling. The ease is still exponential, so the recovery
+    #: decelerates as it closes; it reads as the camera jumping *with* the
+    #: subject, not snapping after them.
+    burst_error_ratio: float = 0.30
+    #: Burst exit hysteresis, as a fraction of the burst entry error. The burst
+    #: disengages once the remaining error falls below ``burst_exit_ratio`` of
+    #: the entry threshold, so a subject near the boundary doesn't toggle rates.
+    burst_exit_ratio: float = 0.6
+    #: Time constant of the burst chase's ease (seconds). Faster than the calm
+    #: chase, still an ease — never a per-frame teleport.
+    burst_tau_s: float = 0.35
+    #: Velocity ceiling during a burst, in pixels per second. The calm ceiling
+    #: would leave the subject out of frame for over a second after a big jump;
+    #: this closes the gap in a few decelerating steps instead.
+    #: Velocity ceiling during a burst, in pixels per second. The calm ceiling
+    #: would leave the subject out of frame for over a second after a big jump;
+    #: this closes the gap in a few decelerating steps instead.
+    burst_velocity_px_s: float = 700.0
     #: Time constant of the chase's ease-in/out (seconds). Slower reads calmer;
     #: this is what makes the camera lag the walker instead of gluing to them.
     #: Kept slow (~0.60s) so a triggered chase reads as a calm operator pan,
@@ -189,6 +221,7 @@ def lazy_follow(
     config: SmoothingConfig | None = None,
     *,
     reference_px: float,
+    vertical: bool = False,
 ) -> list[tuple[float, float]]:
     """Hysteresis dead-band follow: move less, and when you move, don't chase.
 
@@ -218,13 +251,20 @@ def lazy_follow(
     The hysteresis between the trigger and hold bands still keeps a subject
     pacing on the boundary from toggling the camera between chase and rest.
 
+    Beyond ``burst_error_ratio`` of ``reference_px`` the chase switches to a
+    fast recovery (``burst_tau_s`` ease, ``burst_velocity_px_s`` ceiling) —
+    what a subject jumping or lunging out of frame needs — and eases back to
+    the calm chase as the gap closes, exiting the burst at
+    ``burst_exit_ratio`` of the entry threshold.
+
     Preconditions:
-        samples are sorted by timestamp, ``reference_px`` is the tight crop
-        dimension (pixels) the margins scale against.
+        samples are sorted by timestamp, ``reference_px`` is the crop dimension
+        (pixels) the margins scale against — width for x, height for y.
     """
     config = config or SmoothingConfig()
 
-    follow_margin = max(config.follow_margin_ratio * reference_px, config.dead_zone_px)
+    wake_ratio = config.follow_margin_ratio_y if vertical else config.follow_margin_ratio
+    follow_margin = max(wake_ratio * reference_px, config.dead_zone_px)
     hold_margin = max(config.hold_margin_ratio * reference_px, 1.0)
     if hold_margin >= follow_margin:
         hold_margin = follow_margin * 0.5
@@ -236,6 +276,7 @@ def lazy_follow(
     output: list[tuple[float, float]] = []
     camera: float | None = None
     chasing = False
+    burst_active = False
     previous_time: float | None = None
 
     for timestamp, target in samples:
@@ -254,11 +295,26 @@ def lazy_follow(
                 chasing = True
 
             if chasing:
+                # Burst selection: a huge error means the subject jumped or
+                # lunged out of frame — recover fast, then hand back to the
+                # calm chase well before closing, so the final approach keeps
+                # the operator-pan feel. Entry/exit hysteresis prevents rate
+                # flapping when the subject sits near the boundary.
+                burst_threshold = config.burst_error_ratio * reference_px
+                burst_exit_limit = config.burst_exit_ratio * burst_threshold
+                if burst_active:
+                    burst_active = abs(error) >= burst_exit_limit
+                else:
+                    burst_active = abs(error) >= burst_threshold
+
+                tau = config.burst_tau_s if burst_active else config.follow_tau_s
+                ceiling = config.burst_velocity_px_s if burst_active else config.max_velocity_px_s
+
                 # Exponential ease: large steps at the far edge of the chase,
                 # gentle creep as we close in. This is the "don't chase" feel.
-                alpha = 1.0 - math.exp(-dt / config.follow_tau_s)
+                alpha = 1.0 - math.exp(-dt / tau)
                 step = error * alpha
-                max_step = config.max_velocity_px_s * dt
+                max_step = ceiling * dt
                 if abs(step) > max_step:
                     step = math.copysign(max_step, step)
                 camera += step
