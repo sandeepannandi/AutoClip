@@ -23,6 +23,46 @@ from autoclip.pipeline.reframe.croppath import (
 TRACKING_GRADES: list[str] = ["warm", "punchy", "cool", "film"]
 
 
+class TestEncoderArgs:
+    """Quality presets: slow x264, p4 NVENC — clips are short, spend the time."""
+
+    @staticmethod
+    def _patch_report(monkeypatch, nvenc_works: bool) -> None:
+        from types import SimpleNamespace
+
+        fake = SimpleNamespace(ffmpeg=SimpleNamespace(nvenc_works=nvenc_works))
+        monkeypatch.setattr(export, "report", lambda: fake)
+
+    def test_software_encoder_uses_the_slow_preset(self, monkeypatch) -> None:
+        from autoclip.config import ExportSettings
+
+        self._patch_report(monkeypatch, nvenc_works=False)
+
+        args = export.encoder_args(ExportSettings(prefer_hardware_encoder=True))
+
+        assert "libx264" in args
+        assert args[args.index("-preset") + 1] == "slow"
+
+    def test_nvenc_uses_p4_when_available(self, monkeypatch) -> None:
+        from autoclip.config import ExportSettings
+
+        self._patch_report(monkeypatch, nvenc_works=True)
+
+        args = export.encoder_args(ExportSettings(prefer_hardware_encoder=True))
+
+        assert "h264_nvenc" in args
+        assert args[args.index("-preset") + 1] == "p4"
+
+    def test_hardware_encoder_is_skipped_when_disabled(self, monkeypatch) -> None:
+        from autoclip.config import ExportSettings
+
+        self._patch_report(monkeypatch, nvenc_works=True)
+
+        args = export.encoder_args(ExportSettings(prefer_hardware_encoder=False))
+
+        assert "libx264" in args
+
+
 def _request(
     color_grade: str = "none", *, segments: int = 1, burn_captions: bool = True
 ) -> export.ExportRequest:

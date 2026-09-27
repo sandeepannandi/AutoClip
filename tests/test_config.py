@@ -19,6 +19,34 @@ def test_defaults_load_without_a_config_file() -> None:
     assert set(settings.providers) == {"anthropic", "openai", "gemini", "ollama"}
 
 
+def test_ingest_defaults_to_the_2160p_ladder() -> None:
+    # The reframe crop needs source pixels; 1080p sources upscale into mush.
+    settings = config.load()
+
+    assert "height<=2160" in settings.ingest.ytdlp_format
+
+
+def test_saved_1080p_default_is_migrated() -> None:
+    # A config saved by a pre-2160p version carries the old default verbatim;
+    # load() upgrades it once. A customised format is left untouched.
+    paths.ensure_layout()
+    paths.config_path().write_text(
+        json.dumps({"ingest": {"ytdlp_format": config.LEGACY_YTDLP_FORMAT}}),
+        encoding="utf-8",
+    )
+
+    migrated = config.load()
+
+    assert migrated.ingest.ytdlp_format == config.IngestSettings().ytdlp_format
+
+    custom = {"ingest": {"ytdlp_format": "best[height<=480]"}}
+    paths.config_path().write_text(json.dumps(custom), encoding="utf-8")
+
+    untouched = config.load()
+
+    assert untouched.ingest.ytdlp_format == "best[height<=480]"
+
+
 def test_settings_round_trip() -> None:
     settings = config.load()
     settings.active_provider = "ollama"

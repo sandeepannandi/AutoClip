@@ -557,6 +557,39 @@ class TestTrackSegment:
         assert 0.0 <= segment.keyframes[0].x <= self.SOURCE_W - self.CROP_W
 
 
+class TestDetectionDownscale:
+    """4K frames are downscaled before landmarking; coordinates must not be."""
+
+    def test_observations_are_reported_in_source_pixels(self) -> None:
+        # Landmarks arrive normalised to whatever frame size the detector saw;
+        # _to_observation must scale by the SOURCE dimensions so a 4K source
+        # yields 4K-pixel observations even though detection ran at 720p.
+        from autoclip.pipeline.reframe import faces as faces_module
+
+        class FakeLandmark:
+            def __init__(self, x: float, y: float) -> None:
+                self.x = x
+                self.y = y
+
+        # 468 landmarks marching diagonally, like the real model emits.
+        landmarks = [FakeLandmark(0.1 + 0.0005 * i, 0.2 + 0.0005 * i) for i in range(468)]
+
+        observation = faces_module._to_observation(landmarks, 0.0, 3840, 2160)
+
+        assert observation is not None
+        # xs run 0.1..0.3335 of 3840 → centre (384 + 1280.64) / 2.
+        assert observation.cx == pytest.approx(832.3, abs=0.5)
+        # Eye line at landmark indices 33/133/362/263 of the same march.
+        expected_eye_y = sum(0.2 + 0.0005 * i for i in (33, 133, 362, 263)) / 4 * 2160
+        assert observation.eye_y == pytest.approx(expected_eye_y, abs=0.5)
+
+    def test_detect_cap_is_below_4k(self) -> None:
+        # The whole point of the cap: detection must never chew full-res frames.
+        from autoclip.pipeline.reframe.faces import DETECT_MAX_HEIGHT
+
+        assert DETECT_MAX_HEIGHT <= 720
+
+
 class TestTracking:
     def _observation(self, t: float, cx: float, cy: float = 400.0) -> FaceObservation:
         return FaceObservation(t=t, cx=cx, cy=cy, width=200, height=260, eye_y=cy - 40, mar=0.05)

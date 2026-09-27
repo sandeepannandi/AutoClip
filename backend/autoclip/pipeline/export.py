@@ -229,13 +229,18 @@ def encoder_args(settings: ExportSettings) -> list[str]:
     NVENC is materially faster where available. Its quality knob is ``-cq``
     rather than ``-crf``, and the two scales are close enough that reusing the
     configured value keeps output consistent between machines.
+
+    x264 uses ``slow`` rather than ``medium``: clips are short (about a
+    minute), so the ~2x encode time is acceptable, and the same CRF buys
+    visibly fewer artefacts on fine detail — exactly what a downscaled 4K
+    crop is full of. NVENC steps p5 → p4 for the same reason.
     """
     if settings.prefer_hardware_encoder and report().ffmpeg.nvenc_works:
         return [
             "-c:v",
             "h264_nvenc",
             "-preset",
-            "p5",
+            "p4",
             "-rc",
             "vbr",
             "-cq",
@@ -249,7 +254,7 @@ def encoder_args(settings: ExportSettings) -> list[str]:
         "-c:v",
         "libx264",
         "-preset",
-        "medium",
+        "slow",
         "-crf",
         str(settings.crf),
         "-profile:v",

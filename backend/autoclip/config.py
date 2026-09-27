@@ -74,9 +74,22 @@ class ClipSettings(BaseModel):
     max_clips: int = 10
 
 
+# The pre-2160p format default. A config saved by an older version carries
+# this value; load() migrates it to the current default once.
+LEGACY_YTDLP_FORMAT = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"
+
+
 class IngestSettings(BaseModel):
-    #: yt-dlp format selector. Default caps at 1080p to keep downloads sane.
-    ytdlp_format: str = "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080]"
+    #: yt-dlp format selector. Caps at 2160p: the reframe stage crops a narrow
+    #: vertical window out of the source, so a 4K source yields a ~1215px-wide
+    #: crop that downscales crisply to 1080 — a 1080p source yields ~607px and
+    #: the export upscales it into mush. Downloads are bigger; quality is worth
+    #: it, and the selector still falls back down the ladder when 4K is absent.
+    ytdlp_format: str = (
+        "bestvideo[height<=2160][ext=mp4]+bestaudio[ext=m4a]/"
+        "bestvideo[height<=2160]+bestaudio/"
+        "best[height<=2160]"
+    )
     #: Browser to pull YouTube cookies from ("chrome", "firefox", "edge", ...).
     #: As of 2026 most anonymous YouTube downloads hit a bot check that only
     #: browser cookies reliably clear, so this is a first-class setting.
@@ -158,7 +171,19 @@ def load() -> Settings:
     fallback = raw.pop("_fallback_secrets", {}) or {}
     settings = Settings.model_validate(raw)
     settings._fallback_secrets = fallback
+    _migrate(settings)
     return settings
+
+
+def _migrate(settings: Settings) -> None:
+    """One-time upgrades of settings saved by older versions.
+
+    Only rewrites values the user never changed: a saved default equal to the
+    old default is moved to the new default, a customised value is left alone.
+    """
+    if settings.ingest.ytdlp_format == LEGACY_YTDLP_FORMAT:
+        settings.ingest.ytdlp_format = IngestSettings().ytdlp_format
+        log.info("Migrated ingest.ytdlp_format from the 1080p default to the 2160p ladder.")
 
 
 def save(settings: Settings) -> None:

@@ -27,6 +27,13 @@ DEFAULT_SAMPLE_FPS = 5.0
 #: meaningful and we fall back to a wide shot regardless.
 MAX_FACES = 4
 
+#: Frames taller than this are downscaled before landmarking. MediaPipe's
+#: accuracy is resolution-independent above ~360p — the landmarker works on
+#: normalised coordinates — so feeding it a 2160p frame costs ~9x the compute
+#: for the same boxes. Observations are reported in source pixels either way:
+#: ``_to_observation`` rescales by the original frame dimensions.
+DETECT_MAX_HEIGHT = 720
+
 # Canonical FaceMesh landmark indices.
 _UPPER_INNER_LIP = 13
 _LOWER_INNER_LIP = 14
@@ -124,6 +131,18 @@ def sample_faces(
 
     with FaceLandmarker.create_from_options(options) as landmarker:
         for timestamp, frame, width, height in _iter_frames(cv2, video, start_s, end_s, sample_fps):
+            # Downscale for detection only; ``width``/``height`` stay the
+            # source dimensions so observations land in source pixels.
+            if height > DETECT_MAX_HEIGHT:
+                scale = DETECT_MAX_HEIGHT / height
+                # cv2 ships no type stubs; ``frame`` arrives untyped from the
+                # capture loop, so the call needs the overload ignore.
+                frame = cv2.resize(  # type: ignore[call-overload]
+                    frame,
+                    (max(1, round(width * scale)), DETECT_MAX_HEIGHT),
+                    interpolation=cv2.INTER_AREA,
+                )
+
             image = mp.Image(image_format=mp.ImageFormat.SRGB, data=frame)
             # VIDEO mode demands monotonically increasing integer milliseconds.
             result = landmarker.detect_for_video(image, int(timestamp * 1000))
