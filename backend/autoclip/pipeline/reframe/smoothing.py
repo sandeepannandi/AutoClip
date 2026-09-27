@@ -22,12 +22,12 @@ decelerating ease once they pass it, and returns to the near-centre band — the
 same bank-and-hold rhythm an operator uses.
 
 The park is not a freeze. While parked the camera *settles*: it eases toward
-the subject at a rate roughly an order of magnitude slower than a chase. A few
-pixels per frame is invisible as motion but, over a second or two, puts the
-subject back on the centre line — the frame the viewer actually sees is
-composed, while the micro-movement that gets it there never registers. This is
-what keeps a subject who drifts and stops from standing near the frame edge for
-the rest of the shot.
+the subject at a rate several times slower than a chase (tau 3.0s vs 0.6s). A
+couple of pixels per frame is invisible as motion but, over a second or two,
+puts the subject back on the centre line — the frame the viewer actually sees
+is composed, while the micro-movement that gets it there never registers. This
+is what keeps a subject who drifts and stops from standing near the frame edge
+for the rest of the shot.
 
 Reference: Casiez, Roussel & Vogel, "1€ Filter" (CHI 2012).
 """
@@ -111,15 +111,16 @@ class SmoothingConfig:
     max_velocity_px_s: float = 220.0
     #: Lazy-follow trigger. The camera stays parked until the subject's ideal
     #: framing drifts further than this *fraction of the crop width* from the
-    #: camera centre. Pacing/waving stays inside the band, so the frame rests.
-    #: Raised to ~0.28 so small head tilts / shoulder turns stay inside the
-    #: parked band — the camera only wakes for a genuinely big move.
-    follow_margin_ratio: float = 0.28
+    #: camera centre. Small head tilts / shoulder turns stay inside the band,
+    #: so the frame rests, but ordinary repositioning (~15% of the frame) now
+    #: wakes it instead of leaving the subject parked visibly off-centre for
+    #: the rest of the shot.
+    follow_margin_ratio: float = 0.14
     #: Lazy-follow hysteresis. Once chasing, the camera stops again the moment
     #: the subject is back inside this *fraction of the crop width* of centre.
     #: Narrower than ``follow_margin_ratio`` so the trigger never oscillates at
     #: the boundary.
-    hold_margin_ratio: float = 0.06
+    hold_margin_ratio: float = 0.04
     #: Time constant of the chase's ease-in/out (seconds). Slower reads calmer;
     #: this is what makes the camera lag the walker instead of gluing to them.
     #: Kept slow (~0.60s) so a triggered chase reads as a calm operator pan,
@@ -128,11 +129,14 @@ class SmoothingConfig:
     #: Time constant of the settle (seconds). While parked inside the band the
     #: camera keeps easing toward the subject at this much slower rate, so the
     #: resting frame ends centred without the settle registering as motion —
-    #: a 40px offset closes at ~5 px/s initially and decays exponentially,
-    #: which is invisible against normal subject sway. Off-centre parking is
-    #: the complaint this fixes: a subject who drifts and stops used to be
-    #: framed off-centre for the rest of the shot.
-    settle_tau_s: float = 8.0
+    #: a 40px offset closes at ~13 px/s initially and decays exponentially,
+    #: which still reads as settling rather than a camera move. Tightened from
+    #: 8.0 (τ=8 left a drifted subject near the frame edge for ~10s); 3.0
+    #: re-centres within a couple of seconds while keeping every per-sample
+    #: step under ~3px on a phone-width crop. Off-centre parking is the
+    #: complaint this fixes: a subject who drifts and stops must not be framed
+    #: off-centre for the rest of the shot.
+    settle_tau_s: float = 3.0
     #: Fraction of ``reference_px`` below which the settle is suspended. At rest
     #: the dead zone absorbs detection noise anyway; this is a floor for
     #: reference sizes so small the settle step would be indivisible.
@@ -206,8 +210,8 @@ def lazy_follow(
     eases toward the subject at the much slower ``settle_tau_s`` rate, so a
     subject who drifts and stops is re-centred over the following second or
     two instead of being framed off-centre for the rest of the shot. The settle
-    is deliberately ~1 px/s on a phone-width crop: invisible as motion, but it
-    is what puts the resting frame on the centre line. Movement below
+    is deliberately ~2-4 px/s on a phone-width crop: invisible as motion, but
+    it is what puts the resting frame on the centre line. Movement below
     ``settle_dead_zone_ratio`` of ``reference_px`` is not corrected at all —
     that margin is where detection noise lives.
 

@@ -8,9 +8,9 @@ Pipeline for one clip:
 4. Map diarized speakers onto tracks once, then let turn boundaries drive framing.
 5. Per shot, pick a strategy — TRACK, WIDE, or GENERAL.
 6. Build a raw crop path, drive it through the lazy-follow (a hysteresis
-   dead-band that parks the camera while the speaker stays in frame centre
+   dead-band that parks the camera while the speaker stays near frame centre
    and only chases — slowly — when they genuinely leave; while parked it
-   settles toward the subject at an invisible ~1 px/s so the resting frame
+   settles toward the subject at an invisible ~3 px/s so the resting frame
    ends centred rather than wherever the last chase happened to stop), and
    emit segments.
 

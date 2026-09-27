@@ -129,26 +129,28 @@ class TestOneEuroFilter:
 
 class TestLazyFollow:
     CONFIG = smoothing.SmoothingConfig()
-    # With reference_px=600: follow_margin = 0.28*600 = 168px; hold = 0.06*600 = 36px.
+    # With reference_px=600: follow_margin = 0.14*600 = 84px; hold = 0.04*600 = 24px;
+    # settle dead zone = 0.01*600 = 6px.
     REFERENCE = 600.0
 
     def test_parks_while_the_subject_stays_inside_the_band(self) -> None:
-        # Wandering, waving, weight-shifting — none of it leaves the 168px
+        # Wandering, waving, weight-shifting — none of it leaves the 84px
         # band, so the camera never wakes into a chase. The settle creeps
-        # toward the wander's midline at sub-pixel-per-step speed: over the
-        # whole series it drifts a few dozen pixels, never visibly.
-        samples = [(i * 0.2, 500 + (50 if i % 2 else -50)) for i in range(40)]
+        # toward the wander's midline at a few px per sample: over the whole
+        # series it drifts a few dozen pixels, one-directional, no reversals.
+        samples = [(i * 0.2, 500 + (40 if i % 2 else -40)) for i in range(40)]
 
         followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
 
-        assert followed[0][1] == pytest.approx(450.0)  # starts on the first target
+        assert followed[0][1] == pytest.approx(460.0)  # starts on the first target
         assert max(v for _, v in followed) - min(v for _, v in followed) < 40.0
-        # Settle steps stay invisible: a fraction of a percent of the ceiling.
-        assert max(abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)) < 3.0
+        # Settle steps stay invisible: well under chase scale (44px/sample).
+        assert max(abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)) < 6.0
 
     def test_follows_a_genuine_drift_past_the_band(self) -> None:
-        # A fast sustained departure wakes the camera after the first band
-        # crossing; the ramp to 300 + 40*29 = 1460 is real tracking.
+        # A fast sustained departure wakes the camera once the target is
+        # ~84px off (the third sample); the ramp to 300 + 40*29 = 1460 is
+        # real tracking.
         samples = [(i * 0.2, 300 + i * 40) for i in range(30)]
 
         followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
@@ -156,10 +158,11 @@ class TestLazyFollow:
         assert followed[-1][1] > 800
 
     def test_hysteresis_stops_it_waking_again_on_small_movement(self) -> None:
-        # Once the subject returns inside the narrow hold band the camera stops
-        # chasing; the settle then creeps the last ~30px out over seconds. The
-        # wobble must not re-arm the chase: per-step movement stays far under
-        # the velocity ceiling, and the residual offset shrinks monotonically.
+        # Once the subject returns inside the narrow 24px hold band the camera
+        # stops chasing; the settle then eases the last ~20px out over a
+        # second or two. The wobble must not re-arm the chase: per-step
+        # movement stays far under the velocity ceiling, and the residual
+        # offset shrinks monotonically.
         samples = [
             (0.0, 500.0),
             (0.2, 700.0),  # far out: chase
@@ -172,38 +175,61 @@ class TestLazyFollow:
         followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
         values = [v for _, v in followed]
 
+        # Velocity-clamped: the first chase step is capped at 220px/s * 0.2s = 44px.
         assert followed[1][1] == pytest.approx(544.0, abs=1.0)
         steps = [abs(b - a) for (_, a), (_, b) in zip(followed[2:], followed[3:], strict=False)]
         assert max(steps) < 10.0
         assert values[-1] > values[2]  # settling toward the subject, not away
 
     def test_parks_through_an_8_percent_drift(self) -> None:
-        # 8% of the 600px crop width is 48px — well inside the 168px follow
-        # band. The camera starts on the subject, who sways +-48 around 520 (a
-        # head tilt whose midline sits 20px off). The chase must never wake;
-        # per-sample movement stays at settle scale (~1.2px/step measured).
+        # 8% of the 600px crop width is 48px — inside the 84px follow band.
+        # The camera starts on the subject, who sways +-48 around 520. The
+        # chase must never wake; the settle tracks the sway's slow midline at
+        # settle scale (~2.6px/step measured, ~53px range over the 8s).
         samples = [(i * 0.2, 520 + 48 * math.sin(i * 0.5)) for i in range(40)]
 
         followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
 
         assert followed[0][1] == pytest.approx(520.0)
-        assert max(v for _, v in followed) - min(v for _, v in followed) < 10.0
-        assert max(abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)) < 5.0
+        assert max(v for _, v in followed) - min(v for _, v in followed) < 60.0
+        assert max(abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)) < 4.0
 
     def test_settle_recentres_a_drifted_subject(self) -> None:
         # THE off-centre regression: the camera starts centred on the subject
-        # at 500; the subject steps to 590 (+90px, inside the 168px follow band
-        # — no chase) and holds. The old controller froze them off-centre
-        # forever; the settle must close most of that gap invisibly.
+        # at 500; the subject steps to 590 (+90px, 15% of the crop — past the
+        # 84px band) and holds. The camera wakes into a gentle decelerating
+        # chase and the settle finishes the job: back on the centre line
+        # within ~1.5s instead of being framed off-centre for the whole shot.
         samples = [(i * 0.2, 500.0) for i in range(3)] + [(i * 0.2, 590.0) for i in range(3, 53)]
 
         followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
         values = [v for _, v in followed]
 
         assert values[2] == pytest.approx(500.0)  # still centred before the drift
-        assert values[-1] == pytest.approx(590.0, abs=30.0)  # >2/3 re-centred
-        # And the correction is invisible: far under the velocity ceiling.
-        assert max(abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)) < 3.0
+        assert values[3] > 510.0  # the wake actually happened
+        assert values[-1] == pytest.approx(590.0, abs=10.0)  # fully re-centred
+        # And the correction stays calm: every step is well under the
+        # velocity ceiling (220px/s * 0.2s = 44px), decelerating as it closes.
+        steps = [abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)]
+        assert max(steps) < 30.0
+
+    def test_settle_closes_a_within_band_drift_quickly(self) -> None:
+        # Second off-centre regression: a +70px drift (11.7% of the crop)
+        # stays inside the 84px wake band, so no chase is armed — the settle
+        # alone must still pull the subject back near the centre line within
+        # a couple of seconds. Under the old tuning (tau=8s, 168px band) this
+        # offset lingered at ~10% of the frame for the rest of the shot.
+        samples = [(i * 0.2, 500.0) for i in range(3)] + [(i * 0.2, 570.0) for i in range(3, 33)]
+
+        followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
+        values = [v for _, v in followed]
+
+        assert values[2] == pytest.approx(500.0)
+        # ~6s of settling at tau=3 closes ~86% of the gap.
+        assert values[-1] == pytest.approx(570.0, abs=15.0)
+        # And it got there by settling, not by waking the chase: per-sample
+        # movement stays far under chase scale (44px/sample).
+        assert max(abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)) < 6.0
 
     def test_settle_is_disabled_below_its_dead_zone(self) -> None:
         # Sub-settle-dead-zone offsets (1% of 600 = 6px) are detection-noise
@@ -218,7 +244,7 @@ class TestLazyFollow:
         self,
     ) -> None:
         # A crossing of 35% of the crop width (210px) wakes the camera, which
-        # chases slowly (velocity-clamped ease), stops inside the 36px hold
+        # chases slowly (velocity-clamped ease), stops inside the 24px hold
         # band, and the settle then closes the remaining distance invisibly.
         samples = [(i * 0.2, 500.0) for i in range(3)] + [(i * 0.2, 710.0) for i in range(3, 33)]
 
@@ -231,18 +257,19 @@ class TestLazyFollow:
         assert abs(values[-1] - 710.0) <= 20.0
         assert abs(values[-1] - values[-2]) < 2.0  # and it is calm
 
-    def test_boundary_pacing_never_oscillates_the_camera(self) -> None:
-        # Drifting in/out at +-120px around centre stays inside the 168px
-        # band: the camera must never chase (per-sample movement stays at
-        # settle scale, ~3px/step measured — an order under the ceiling) and
-        # stays near the pacing's midline rather than oscillating with it.
-        samples = [(0.0, 500.0)] + [(i * 0.2, 500 + (120 if i % 2 else -120)) for i in range(1, 60)]
+    def test_inside_band_pacing_never_oscillates_the_camera(self) -> None:
+        # Pacing at +-60px around centre — inside the 84px band — must never
+        # wake the chase. The settle wobbles at most ~4px per sample around
+        # the pacing midline (measured), far under the velocity ceiling, and
+        # never runs away toward one extreme.
+        samples = [(0.0, 500.0)] + [(i * 0.2, 500 + (60 if i % 2 else -60)) for i in range(1, 60)]
 
         followed = smoothing.lazy_follow(samples, self.CONFIG, reference_px=self.REFERENCE)
 
+        assert followed[0][1] == pytest.approx(500.0)
         assert max(v for _, v in followed) - min(v for _, v in followed) < 10.0
         steps = [abs(b - a) for (_, a), (_, b) in zip(followed, followed[1:], strict=False)]
-        assert max(steps) < 10.0
+        assert max(steps) < 5.0
 
     def test_chase_velocity_is_clamped(self) -> None:
         # A detection glitch must never whip the frame across the shot.

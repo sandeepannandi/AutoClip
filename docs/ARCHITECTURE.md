@@ -188,13 +188,15 @@ successes, and it costs nothing when the first response is already valid.
 
 The reframe controller (`reframe/smoothing.py`) trades between two failure
 modes: a camera glued to the subject (constant reframing) and a camera that
-parks off-centre. The lazy-follow dead-band parks aggressively, but the park is
-a *settle*, not a freeze — while parked the crop eases toward the subject at
-~1 px/s (`settle_tau_s`), below the threshold where it reads as motion, so the
-resting frame ends on the centre line. Close-ups are tracked rather than
-mean-locked (a mean-locked close-up freezes the subject's drift), and genuine
-locks sit on the median observed position, which is robust to detection
-outliers.
+parks off-centre. The lazy-follow dead-band parks on small movement, but the
+park is a *settle*, not a freeze — while parked the crop eases toward the
+subject at a few px/s (`settle_tau_s`), below the threshold where it reads as
+motion, so the resting frame ends on the centre line. The wake band
+(`follow_margin_ratio`) is narrow enough that ordinary repositioning triggers a
+gentle chase rather than leaving the subject parked near the frame edge.
+Close-ups are tracked rather than mean-locked (a mean-locked close-up freezes
+the subject's drift), and genuine locks sit on the median observed position,
+which is robust to detection outliers.
 
 ## Concurrency
 
