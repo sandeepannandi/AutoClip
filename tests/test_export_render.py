@@ -334,6 +334,72 @@ class TestMultiSegmentRender:
         info = ffmpeg.probe(destination)
         assert (info.width, info.height) == (1080, 1920)
 
+    def test_headroom_pad_renders_and_exposes_top_band(self, source_video, words, tmp_path) -> None:
+        """A padded close-up keeps the whole head: content sinks, top band blurs.
+
+        The real-world worst case is a full-HEIGHT 9:16 window (landscape
+        source): no y shift can free headroom, so the padded chain renders the
+        content shrunk and bottom-pinned over a blurred pad. Structural proof:
+        the top band of the padded render must be far smoother (blurred) than
+        the same band of the ordinary render, which shows untouched footage.
+        """
+        segment = CropSegment(
+            start_s=0.0,
+            end_s=5.0,
+            width=404,
+            height=SOURCE_H,  # full-height window: the no-slack case
+            keyframes=[CropKeyframe(0.0, 200.0, 0.0)],
+            strategy=Strategy.TRACK,
+        )
+
+        padded = tmp_path / "padded.mp4"
+        export.export_clip(
+            make_request(
+                source_video,
+                padded,
+                CropPath(
+                    source_width=SOURCE_W,
+                    source_height=SOURCE_H,
+                    segments=[
+                        CropSegment(
+                            **{**segment.__dict__, "headroom": 0.14}
+                        )
+                    ],
+                ),
+                words,
+                burn_captions=False,
+            ),
+            work_dir=tmp_path / "work",
+        )
+
+        plain = tmp_path / "plain.mp4"
+        export.export_clip(
+            make_request(
+                source_video,
+                plain,
+                CropPath(source_width=SOURCE_W, source_height=SOURCE_H, segments=[segment]),
+                words,
+                burn_captions=False,
+            ),
+            work_dir=tmp_path / "work2",
+        )
+
+        assert (ffmpeg.probe(padded).width, ffmpeg.probe(padded).height) == (1080, 1920)
+
+        def band_gradient(frame) -> float:
+            """Mean gradient energy of the top pad band (rows 0..240)."""
+            gray = np.asarray(frame)[:240, :, :].mean(axis=2)
+            return float(np.abs(np.diff(gray, axis=0)).mean()) + float(
+                np.abs(np.diff(gray, axis=1)).mean()
+            )
+
+        padded_band = band_gradient(_frame_rgb(padded, 2.0))
+        plain_band = band_gradient(_frame_rgb(plain, 2.0))
+
+        # The pad is a 20:2 boxblur over the same footage: its band must be
+        # dramatically smoother than the untouched top of the plain crop.
+        assert padded_band < plain_band * 0.5
+
 
 class TestEncoding:
     def test_software_encoder_path(self, source_video, words, tmp_path) -> None:

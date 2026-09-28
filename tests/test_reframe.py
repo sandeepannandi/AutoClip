@@ -9,7 +9,13 @@ from __future__ import annotations
 import math
 
 import pytest
-from autoclip.pipeline.reframe import croppath, smoothing
+from autoclip.pipeline.reframe import (
+    _headroom_overflow,
+    _track_segment,
+    _wide_segment,
+    croppath,
+    smoothing,
+)
 from autoclip.pipeline.reframe.croppath import (
     CropKeyframe,
     CropSegment,
@@ -627,6 +633,106 @@ class TestTrackSegment:
         segment = self._segment(observations)
 
         assert 0.0 <= segment.keyframes[0].x <= self.SOURCE_W - self.CROP_W
+
+
+class TestHeadroom:
+    """Headroom-aware framing for close-ups whose skull overflows the top edge.
+
+    A 9:16 crop of a landscape source is full-height, so the window cannot
+    shift up to free headroom; the remedy is a padded (zoomed-out over a
+    blurred pad) render requested through ``CropSegment.headroom``.
+    """
+
+    CROP_H = 720
+
+    def _observation(self, t: float, face_top: float, height: float = 300.0) -> FaceObservation:
+        return FaceObservation(
+            t=t,
+            cx=960,
+            cy=face_top + height / 2,
+            width=220,
+            height=height,
+            eye_y=face_top + height * 0.4,
+            mar=0.05,
+        )
+
+    def test_tight_close_up_requests_padding(self) -> None:
+        from autoclip.pipeline.reframe import HEADROOM_PAD_FRACTION
+
+        # Crown sits 80px ABOVE the frame top on every sample: unfixable by
+        # any y shift on a full-height window. Padding must engage.
+        observations = [self._observation(i * 0.2, -80.0) for i in range(10)]
+
+        assert _headroom_overflow(
+            observations, crop_h=self.CROP_H, source_h=self.CROP_H
+        ) == pytest.approx(HEADROOM_PAD_FRACTION)
+
+    def test_comfortable_framing_never_pads(self) -> None:
+        # Ample sky above the crown — the ordinary case must stay untouched.
+        observations = [self._observation(i * 0.2, 200.0) for i in range(10)]
+
+        assert _headroom_overflow(
+            observations, crop_h=self.CROP_H, source_h=self.CROP_H
+        ) == 0.0
+
+    def test_single_mis_detection_does_not_pad(self) -> None:
+        # One frame where the landmarker jumps must not pad a whole segment.
+        observations = [self._observation(i * 0.2, 200.0) for i in range(10)]
+        observations[3] = self._observation(0.6, -80.0)
+
+        assert _headroom_overflow(
+            observations, crop_h=self.CROP_H, source_h=self.CROP_H
+        ) == 0.0
+
+    def test_persistent_tightness_survives_one_outlier(self) -> None:
+        # The inverse case: genuinely tight the whole way, with one good frame.
+        observations = [self._observation(i * 0.2, -80.0) for i in range(10)]
+        observations[3] = self._observation(0.6, 200.0)
+
+        assert _headroom_overflow(
+            observations, crop_h=self.CROP_H, source_h=self.CROP_H
+        ) > 0.0
+
+    def test_track_segment_carries_headroom(self) -> None:
+        from autoclip.pipeline.reframe import ReframeConfig
+        from autoclip.pipeline.reframe.tracker import FaceTrack
+
+        observations = [self._observation(i * 0.2, -80.0) for i in range(10)]
+        track = FaceTrack(id=0, observations=observations)
+
+        segment = _track_segment(
+            track,
+            start_s=observations[0].t,
+            end_s=observations[-1].t + 0.2,
+            source_w=1920,
+            source_h=720,
+            crop_w=404,
+            crop_h=self.CROP_H,
+            config=ReframeConfig(),
+        )
+
+        assert segment.headroom > 0.0
+
+    def test_wide_segment_carries_headroom(self) -> None:
+        from autoclip.pipeline.reframe import ReframeConfig  # noqa: F401
+        from autoclip.pipeline.reframe.tracker import FaceTrack
+
+        track = FaceTrack(
+            id=0,
+            observations=[self._observation(i * 0.2, -80.0) for i in range(10)],
+        )
+
+        segment = _wide_segment(
+            [track],
+            start_s=0.0,
+            end_s=2.0,
+            source_w=1920,
+            source_h=720,
+            crop_w=404,
+            crop_h=self.CROP_H,
+        )
+
+        assert segment.headroom > 0.0
 
 
 class TestDetectionDownscale:

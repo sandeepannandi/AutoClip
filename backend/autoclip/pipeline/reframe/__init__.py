@@ -58,6 +58,20 @@ __all__ = [
 #: composed without leaving the chin tight to the bottom edge.
 EYE_LINE_RATIO = 0.38
 
+#: Headroom accounting, in face-height units (landmark-face height ≈ brow-to-
+#: chin; the skull adds roughly another face-height of dome above the brows,
+#: including hair). How much of the skull crown must stay visible above the
+#: landmark top for a frame to read as "whole head on screen".
+HEADROOM_CROWN_FACES = 0.55
+#: A frame that clips more than this much off the crown is outside portrait
+#: convention entirely and triggers the padded (zoomed-out over a blurred
+#: pad) render instead of the ordinary full-bleed crop.
+HEADROOM_OVERFLOW_TOLERANCE_FACES = 0.20
+#: Amount of content shrink when padding engages, as a fraction of output
+#: height. Large enough to be visible headroom, small enough to stay a
+#: close-up; two faces of crown clearance cover almost every source framing.
+HEADROOM_PAD_FRACTION = 0.14
+
 #: A subject whose ideal framing stays within this span for the whole shot is
 #: genuinely static and is better locked than tracked. Kept just above the
 #: dead zone so detection noise on a still subject reads as "barely moves",
@@ -326,6 +340,11 @@ def _track_segment(
         spread_x < LOCK_IF_SPREAD_BELOW_PX and spread_y < LOCK_IF_SPREAD_BELOW_PX
     ) or len(raw) < 3
 
+    # Headroom is measured against the source, not the window path: whether a
+    # skull overflows the top edge has nothing to do with how the path was
+    # clamped, and padding decisions must be stable across lock vs track.
+    headroom = _headroom_overflow(observations, crop_h=crop_h, source_h=source_h)
+
     if should_lock:
         x = statistics.median(item[1] for item in raw)
         y = statistics.median(item[2] for item in raw)
@@ -362,7 +381,43 @@ def _track_segment(
         height=crop_h,
         keyframes=keyframes,
         strategy=Strategy.TRACK,
+        headroom=headroom,
     )
+
+
+def _headroom_overflow(
+    observations: list[FaceObservation], *, crop_h: int, source_h: int
+) -> float:
+    """Padding fraction (0.0 to :data:`HEADROOM_PAD_FRACTION`) a close-up needs.
+
+    A 9:16 crop of a landscape source is usually full-height: the window has
+    zero vertical slack, so when the source itself frames a face tightly the
+    crown lands on — or above — the frame's top edge and no ``y`` shift can
+    recover it. Landmark-face height runs brow to    chin; the skull dome (plus
+    hair) adds roughly another face-height above. When the crown's overflow
+    past the top edge exceeds :data:`HEADROOM_OVERFLOW_TOLERANCE_FACES` faces
+    on a persistent run of samples, the segment asks the export stage to
+    shrink the content slightly and pad the exposed band with a blurred copy —
+    the standard treatment for tight close-ups that no reframing can fix.
+    """
+    worst = 0.0
+    tight = 0
+    total = 0
+    for o in observations:
+        if o.height <= 1:
+            continue
+        total += 1
+        overflow_px = HEADROOM_CROWN_FACES * o.height - o.top
+        if overflow_px / o.height > HEADROOM_OVERFLOW_TOLERANCE_FACES:
+            tight += 1
+            worst = max(worst, overflow_px / o.height)
+
+    # A single mis-detection must not pad an otherwise fine segment — the same
+    # outlier rule as the spread measurement above.
+    if not total or tight < max(2, round(0.1 * total)):
+        return 0.0
+
+    return min(HEADROOM_PAD_FRACTION, min(1.0, worst) * 0.3)
 
 
 def _wide_segment(
@@ -425,6 +480,7 @@ def _wide_segment(
             )
         ],
         strategy=Strategy.WIDE,
+        headroom=_headroom_overflow(observations, crop_h=crop_h, source_h=source_h),
     )
 
 

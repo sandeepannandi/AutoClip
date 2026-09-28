@@ -54,6 +54,11 @@ GRADES: dict[str, str] = {
 LOUDNESS_TRUE_PEAK = -1.5
 LOUDNESS_RANGE = 11.0
 
+#: The crop-path ``headroom`` value at which padding engages. The reframe stage
+#: emits exactly 0.0 or a positive fraction, so this is a single decision point
+#: that keeps the two stages decoupled.
+HEADROOM_ENGAGE = 0.02
+
 AUDIO_BITRATE = "192k"
 AUDIO_SAMPLE_RATE = 48_000
 
@@ -250,6 +255,7 @@ def _rebased_segment(
         strategy=segment.strategy,
         zoom=segment.zoom,
         fit=segment.fit,
+        headroom=segment.headroom,
     )
 
 
@@ -332,6 +338,22 @@ def build_video_filtergraph(
             parts.extend(_fit_chain(source_label, index, out_w, out_h))
             continue
 
+        if segment.headroom >= HEADROOM_ENGAGE:
+            # Tight close-up whose crown overflows the top edge: shrink the
+            # sharp content and expose a blurred pad band at the top (drawn
+            # from the same footage) so the whole head stays visible. The pad
+            # fraction scales with the overflow; the engagement floor stops a
+            # one-off detection flicker from padding a whole segment.
+            parts.extend(
+                _headroom_chain(
+                    source_label, index, max(segment.headroom, 0.05), out_w, out_h
+                )
+            )
+            continue
+
+        # HEADROOM_ENGAGE keeps the two stages decoupled: reframe emits
+        # headroom=0.0 (or None in old crop JSONs) for "ordinary crop".
+
         chain = [segment_crop_filter(segment)]
         if segment.zoom > 0:
             chain.append(_zoom_filter(segment.zoom, out_w, out_h))
@@ -381,6 +403,35 @@ def _fit_chain(source_label: str, index: int, out_w: int, out_h: int) -> list[st
             f"flags=lanczos[fg{index}]"
         ),
         (f"[bg{index}][fg{index}]overlay=(W-w)/2:(H-h)/2,setsar=1,format=yuv420p[v{index}]"),
+    ]
+
+
+def _headroom_chain(
+    source_label: str, index: int, pad: float, out_w: int, out_h: int
+) -> list[str]:
+    """Shrink the content and pad the top band with a blurred copy of itself.
+
+    The input is the segment's full-height crop — the case where no ``y``
+    shift can free headroom, because the window already rides the source's top
+    edge. Content is scaled to ``1 - pad`` of the output size and pinned to
+    the BOTTOM of the frame (that is where a speaker's chest sits), so the
+    exposed band at the top becomes usable headroom. The pad is drawn from a
+    blurred copy of the same crop, so it reads as an extension of the scene —
+    the standard treatment for close-ups that no reframing can fix.
+    """
+    content_h = max(2, round(out_h * (1.0 - pad)))
+    content_w = max(2, round(out_w * (1.0 - pad)))
+    return [
+        f"{source_label}split=2[hrbg{index}][hrfg{index}]",
+        (
+            f"[hrbg{index}]scale={out_w}:{out_h}:force_original_aspect_ratio=increase,"
+            f"crop={out_w}:{out_h},boxblur=20:2[hrb{index}]"
+        ),
+        f"[hrfg{index}]scale={content_w}:{content_h}:flags=lanczos[hrs{index}]",
+        (
+            f"[hrb{index}][hrs{index}]overlay=x=(W-w)/2:y=H-h,"
+            f"scale={out_w}:{out_h}:flags=lanczos,setsar=1,format=yuv420p[v{index}]"
+        ),
     ]
 
 

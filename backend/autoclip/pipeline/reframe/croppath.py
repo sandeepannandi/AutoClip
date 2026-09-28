@@ -74,6 +74,12 @@ class CropSegment:
     #: wider than any crop of the target ratio can hold — cropping there would
     #: cut someone out of frame, which the acceptance bar forbids.
     fit: bool = False
+    #: Headroom zoom for tight close-ups: when the subject's skull overflows
+    #: the crop window's top edge (a full-height window cannot shift up any
+    #: further), the segment renders slightly zoomed out over a blurred pad so
+    #: the whole head stays visible. Fraction of the output height; 0.0 keeps
+    #: the ordinary full-bleed crop. Consumed by the export stage.
+    headroom: float = 0.0
 
     @property
     def duration_s(self) -> float:
@@ -125,6 +131,7 @@ class CropPath:
                     strategy=Strategy(raw.get("strategy", "general")),
                     zoom=raw.get("zoom", 0.0),
                     fit=raw.get("fit", False),
+                    headroom=raw.get("headroom", 0.0),
                 )
             )
         return cls(
