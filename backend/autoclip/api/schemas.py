@@ -151,6 +151,9 @@ class ClipOut(BaseModel):
     score: int
     #: The model's independent read on the opening line's pull, 0-100.
     hook_strength: int = 50
+    #: The model's independent read on why a stranger would stop for this clip
+    #: (usable, entertaining, or energizing), 0-100.
+    value_score: int = 50
     reason: str
     status: str
     user_trimmed: bool
@@ -186,6 +189,7 @@ class ClipOut(BaseModel):
             caption_position=edit.caption_position if edit else "bottom",
             score=clip.score,
             hook_strength=clip.hook_strength,
+            value_score=clip.value_score,
             reason=clip.reason,
             status=clip.status,
             user_trimmed=clip.user_trimmed,

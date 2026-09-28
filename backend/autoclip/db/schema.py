@@ -155,6 +155,24 @@ def _migration_v6(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v7(conn: sqlite3.Connection) -> None:
+    """Persist the model's value read on each clip.
+
+    ``value_score`` — named to avoid the SQL keyword ``VALUE`` — is the
+    model's independent read on why a stranger would stop for this clip
+    (usable, entertaining, or energizing). Kept beside ``score`` and
+    ``hook_strength`` so the ranking blend and the review UI can use it; the
+    default is the same neutral 50 the detection schema uses when a model
+    never returned one, so older rows rank exactly as before.
+    """
+    conn.executescript(
+        """
+        ALTER TABLE clips
+            ADD COLUMN value_score INTEGER NOT NULL DEFAULT 50;
+        """
+    )
+
+
 def _migration_v1(conn: sqlite3.Connection) -> None:
     conn.executescript(_V1)
 
@@ -209,6 +227,7 @@ MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_v4,
     _migration_v5,
     _migration_v6,
+    _migration_v7,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

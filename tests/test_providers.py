@@ -122,6 +122,29 @@ class TestCandidateCoercion:
 
         assert result.clips[0].score == 50
 
+    def test_fractional_value_is_scaled_to_percent(self) -> None:
+        result = ClipCandidates.model_validate(
+            {"clips": [{"start_word_index": 1, "end_word_index": 2, "value": 0.91}]}
+        )
+
+        assert result.clips[0].value == 91
+
+    def test_out_of_range_value_is_clamped(self) -> None:
+        result = ClipCandidates.model_validate(
+            {"clips": [{"start_word_index": 1, "end_word_index": 2, "value": 250}]}
+        )
+
+        assert result.clips[0].value == 100
+
+    def test_null_value_defaults_to_the_middle(self) -> None:
+        # A v2 model that never emits ``value`` reads as neutral, so ranking
+        # leans on quality and hook exactly as before.
+        result = ClipCandidates.model_validate(
+            {"clips": [{"start_word_index": 1, "end_word_index": 2, "value": None}]}
+        )
+
+        assert result.clips[0].value == 50
+
     def test_negative_index_is_rejected(self) -> None:
         from pydantic import ValidationError
 

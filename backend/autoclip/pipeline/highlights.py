@@ -33,19 +33,25 @@ OVERLAP_S = 60
 #: Two candidates covering this much of the same words are the same clip.
 DEDUPE_IOU = 0.4
 
-#: Ranking blends the model's overall clip score with its independent read on
-#: the opening line's pull. Weighted toward the overall score — the hook is
-#: the single biggest predictor of feed performance, but a strong hook on a
-#: clip with no payoff still underperforms. Outcome learning re-ranks the
-#: finalists with real posting data after this, so this blend only orders
-#: what the model produced.
-ENGAGEMENT_WEIGHT = 0.3
-QUALITY_WEIGHT = 0.7
+#: Ranking blends the model's overall clip score with its independent reads on
+#: the opening line's pull and the clip's value (usable, entertaining, or
+#: energizing). Weighted toward the overall score — the hook and value are the
+#: biggest single predictors of feed performance, but a strong hook on a clip
+#: with no payoff still underperforms. Outcome learning re-ranks the finalists
+#: with real posting data after this, so this blend only orders what the model
+#: produced.
+ENGAGEMENT_WEIGHT = 0.2
+VALUE_WEIGHT = 0.2
+QUALITY_WEIGHT = 0.6
 
 
-def engagement_key(score: int, hook_strength: int) -> float:
-    """Blended engagement ranking value in [0, 100]."""
-    return QUALITY_WEIGHT * score + ENGAGEMENT_WEIGHT * hook_strength
+def engagement_key(score: int, hook_strength: int, value: int = 50) -> float:
+    """Blended engagement ranking value in [0, 100].
+
+    ``value`` defaults to the schema's neutral 50 so callers that predate the
+    metric rank exactly as before.
+    """
+    return QUALITY_WEIGHT * score + ENGAGEMENT_WEIGHT * hook_strength + VALUE_WEIGHT * value
 
 #: Videos at least this long get the full clip budget; shorter videos get the
 #: short-video budget. A 10-minute video rarely holds ten distinct highlights:
@@ -293,12 +299,15 @@ def build_clips(
                 score=candidate.score,
                 reason=candidate.reason.strip(),
                 hook_strength=candidate.hook_strength,
+                value_score=candidate.value,
             )
         )
 
     # Refinement can move edges enough that two survivors now overlap.
     clips = _dedupe_clips(clips)
-    clips.sort(key=lambda c: engagement_key(c.score, c.hook_strength), reverse=True)
+    clips.sort(
+        key=lambda c: engagement_key(c.score, c.hook_strength, c.value_score), reverse=True
+    )
     clips = clips[: config.max_clips]  # budget already scaled in detect()
 
     # Outcome learning: logged posting history may reorder the finalists. With
@@ -336,7 +345,9 @@ def dedupe(
     times, sometimes with slightly different edges. Highest score wins.
     """
     ordered = sorted(
-        candidates, key=lambda c: engagement_key(c.score, c.hook_strength), reverse=True
+        candidates,
+        key=lambda c: engagement_key(c.score, c.hook_strength, c.value),
+        reverse=True,
     )
     kept: list[ClipCandidate] = []
 
@@ -358,7 +369,9 @@ def dedupe(
 
 
 def _dedupe_clips(clips: list[Clip], *, iou_threshold: float = DEDUPE_IOU) -> list[Clip]:
-    ordered = sorted(clips, key=lambda c: engagement_key(c.score, c.hook_strength), reverse=True)
+    ordered = sorted(
+        clips, key=lambda c: engagement_key(c.score, c.hook_strength, c.value_score), reverse=True
+    )
     kept: list[Clip] = []
     for clip in ordered:
         if any(

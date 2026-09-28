@@ -230,6 +230,29 @@ class TestClips:
 
         assert listed[0].hook_strength == 50
 
+    def test_value_score_round_trips(self, job: Job) -> None:
+        store.replace_clips(job.id, [self._clip(job, 1, value_score=88)])
+
+        listed = store.list_clips(job.id)
+
+        assert listed[0].value_score == 88
+
+    def test_value_score_defaults_when_absent(self, job: Job) -> None:
+        # A clip produced before the value metric existed reads back as the
+        # neutral default, so old jobs rank exactly as they did.
+        with db.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO clips (id, job_id, rank, start_s, end_s, title, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (new_id(), job.id, 1, 0.0, 50.0, "Legacy", "2026-01-01T00:00:00+00:00"),
+            )
+
+        listed = store.list_clips(job.id)
+
+        assert listed[0].value_score == 50
+
     def test_update_clip_records_a_trim(self, job: Job) -> None:
         clip = self._clip(job, 1)
         store.replace_clips(job.id, [clip])

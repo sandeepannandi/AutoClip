@@ -168,12 +168,30 @@ class TestWindowFailureReporting:
 class TestEngagementRanking:
     """Ranking blends overall score with the model's hook-strength read."""
 
-    def test_engagement_key_blends_score_and_hook(self) -> None:
-        assert highlights.engagement_key(90, 40) == pytest.approx(
-            highlights.QUALITY_WEIGHT * 90 + highlights.ENGAGEMENT_WEIGHT * 40
+    def test_engagement_key_blends_score_hook_and_value(self) -> None:
+        assert highlights.engagement_key(90, 40, 60) == pytest.approx(
+            highlights.QUALITY_WEIGHT * 90
+            + highlights.ENGAGEMENT_WEIGHT * 40
+            + highlights.VALUE_WEIGHT * 60
+        )
+        # Weights still form a convex blend of the three signals.
+        assert pytest.approx(1.0) == (
+            highlights.QUALITY_WEIGHT
+            + highlights.ENGAGEMENT_WEIGHT
+            + highlights.VALUE_WEIGHT
         )
         # A strong hook can outrank a better overall score.
-        assert highlights.engagement_key(85, 95) > highlights.engagement_key(88, 40)
+        assert highlights.engagement_key(85, 95, 50) > highlights.engagement_key(88, 40, 50)
+        # A high-value mid-scoring clip can outrank a flat higher scorer.
+        assert highlights.engagement_key(80, 50, 95) > highlights.engagement_key(88, 50, 40)
+
+    def test_value_defaults_to_the_neutral_middle(self) -> None:
+        # Callers that predate the value metric rank exactly as
+        # quality/hook-only would with a neutral 50.
+        with_value = highlights.engagement_key(80, 60, 50)
+        without_value = highlights.engagement_key(80, 60)
+
+        assert with_value == pytest.approx(without_value)
 
     async def test_equal_scores_rank_by_hook_strength(self) -> None:
         weak_hook = candidate(0, 40, title="Weak", score=80, hook_strength=40)
@@ -210,6 +228,33 @@ class TestEngagementRanking:
         )
 
         assert clips[0].hook_strength == 77
+
+    async def test_value_survives_to_the_clip(self) -> None:
+        provider = FlakyProvider([[candidate(0, 40, value=88)]], error="unused")
+
+        clips = await highlights.detect(
+            make_sentence_transcript(60),
+            provider,
+            DetectionConfig(min_duration_s=1.0, max_duration_s=60.0),
+            job_id="j1",
+        )
+
+        assert clips[0].value_score == 88
+
+    async def test_value_flips_the_ranking(self) -> None:
+        # Same score and hook; the genuinely valuable clip must win on value.
+        flat = candidate(0, 40, title="Flat", score=80, hook_strength=60, value=30)
+        valuable = candidate(50, 100, title="Valuable", score=80, hook_strength=60, value=90)
+        provider = FlakyProvider([[flat, valuable]], error="unused")
+
+        clips = await highlights.detect(
+            make_sentence_transcript(120),
+            provider,
+            DetectionConfig(min_duration_s=1.0, max_duration_s=60.0),
+            job_id="j1",
+        )
+
+        assert [c.title for c in clips] == ["Valuable", "Flat"]
 
 
 class TestHookStart:

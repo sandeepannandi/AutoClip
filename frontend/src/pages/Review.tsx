@@ -292,6 +292,11 @@ export function Review() {
                       “{selected.hook}”
                     </p>
                   )}
+                  <p className="mt-3 text-xs text-ink-500">
+                    <span className="numeric text-ink-300">{selected.score}</span> quality ·{" "}
+                    <span className="numeric text-ink-300">{selected.hook_strength}</span> hook ·{" "}
+                    <span className="numeric text-ink-300">{selected.value_score}</span> value
+                  </p>
                 </div>
 
                 <CaptionEditor
@@ -514,6 +519,8 @@ function ClipRow({
         </p>
         <div className="mt-1 flex items-baseline gap-3">
           <span className="numeric text-xs text-ink-500">{formatDuration(clip.duration_s)}</span>
+          <span className="numeric text-xs text-ink-600">hook {clip.hook_strength}</span>
+          <span className="numeric text-xs text-ink-600">value {clip.value_score}</span>
           {clip.user_trimmed && <span className="text-xs text-ink-600">trimmed</span>}
           {clip.exports.length > 0 && (
             <span className="text-xs text-signal-good">exported</span>

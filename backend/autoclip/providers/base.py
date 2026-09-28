@@ -63,6 +63,10 @@ class ClipCandidate(BaseModel):
     reason: str = ""
     #: The model's read on how hard the opening line grabs a stranger.
     hook_strength: int = Field(default=50, ge=0, le=100)
+    #: The model's read on why a stranger would stop for this clip: usable,
+    #: entertaining, or energizing. Independent of ``score`` so a flat but
+    #: informative moment and a pure-fun moment can be compared fairly.
+    value: int = Field(default=50, ge=0, le=100)
     #: Index of the word the gripping opening line begins at, when the model
     #: can point at one. Optional so older prompt versions and sloppy models
     #: keep working; highlight detection treats it as a hint, never a contract.
@@ -80,7 +84,7 @@ class ClipCandidate(BaseModel):
         # Models occasionally return null or a number where text was asked for.
         return "" if value is None else str(value)
 
-    @field_validator("score", "hook_strength", mode="before")
+    @field_validator("score", "hook_strength", "value", mode="before")
     @classmethod
     def _coerce_percent(cls, value: Any) -> int:
         """Accept floats and 0-1 fractions, which models emit despite the schema."""
@@ -137,8 +141,9 @@ class DetectionConfig:
     language: str = ""
     #: Prompt file stem in ``autoclip/prompts/``. Versioned so contributors can
     #: iterate on prompts without touching code. v2 asks for hook-first starts
-    #: (``hook_word_index``) instead of flat sentence openings.
-    prompt_version: str = "highlight_v2"
+    #: (``hook_word_index``) instead of flat sentence openings. v3 adds the
+    #: independent ``value`` read (usable / entertaining / energizing).
+    prompt_version: str = "highlight_v3"
     temperature: float = 0.3
     #: Calibration examples drawn from the account's own posted-clip history,
     #: pre-rendered as a prompt block. Empty when nothing has been logged or

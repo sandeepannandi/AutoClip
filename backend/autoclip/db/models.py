@@ -142,6 +142,10 @@ class Clip:
     #: The model's independent read on how hard the opening line pulls, 0-100.
     #: Ranked against ``score`` (blended) and shown in the review UI.
     hook_strength: int = 50
+    #: The model's independent read on why a stranger would stop for this clip
+    #: (usable, entertaining, or energizing), 0-100. Ranked against ``score``
+    #: and ``hook_strength`` (blended) and shown in the review UI.
+    value_score: int = 50
     reason: str = ""
     status: ClipStatus = "candidate"
     user_trimmed: bool = False
@@ -165,6 +169,7 @@ class Clip:
             hook=row["hook"],
             score=row["score"],
             hook_strength=row["hook_strength"],
+            value_score=row["value_score"],
             reason=row["reason"],
             status=row["status"],
             user_trimmed=bool(row["user_trimmed"]),
