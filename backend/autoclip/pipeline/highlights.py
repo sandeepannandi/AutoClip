@@ -300,6 +300,7 @@ def build_clips(
                 reason=candidate.reason.strip(),
                 hook_strength=candidate.hook_strength,
                 value_score=candidate.value,
+                emphasis_words=list(candidate.emphasis_words),
             )
         )
 

@@ -19,6 +19,7 @@ from ..db.models import CaptionPosition
 from ..system import report
 from . import captions as captions_module
 from . import ffmpeg, tighten
+from . import punch as punch_module
 from .captions import CaptionStyle
 from .prepare import Silence
 from .reframe.croppath import CropKeyframe, CropPath, CropSegment, segment_crop_filter
@@ -59,6 +60,10 @@ LOUDNESS_RANGE = 11.0
 #: that keeps the two stages decoupled.
 HEADROOM_ENGAGE = 0.02
 
+#: Frame rate the punch zoompan runs at. A fixed rational rate keeps the
+#: expression's frame counter (``on``) deterministic across inputs.
+PUNCH_FPS = 30
+
 AUDIO_BITRATE = "192k"
 AUDIO_SAMPLE_RATE = 48_000
 
@@ -89,6 +94,12 @@ class ExportRequest:
     #: With tightening enabled these become fast-forward spans; None or empty
     #: simply renders untightened.
     silences: list[Silence] | None = None
+    #: Punch-in zoom events, on the same source-absolute timeline as ``words``.
+    #: The export stage converts them to the output timeline (through the
+    #: tighten plan when tightening) and renders them after the concat/grade,
+    #: before captions — the text stays static and legible while the footage
+    #: moves. Empty renders nothing extra.
+    punches: list[punch_module.Punch] | None = None
 
     @property
     def duration_s(self) -> float:
@@ -375,6 +386,13 @@ def build_video_filtergraph(
         parts.append(f"{current}{grade}[vgrade]")
         current = "[vgrade]"
 
+    punch_chain = _punch_filter(request, plan, out_w, out_h)
+    if punch_chain:
+        # Punch-ins run on the assembled clip so the move reads against the
+        # finished frame, before captions — text stays static and legible.
+        parts.append(f"{current}{punch_chain}[vpunch]")
+        current = "[vpunch]"
+
     if request.burn_captions and subtitle_name is not None:
         # Bare relative names — ffmpeg runs with its cwd set to the render
         # workspace, so there is nothing here that needs escaping.
@@ -433,6 +451,107 @@ def _headroom_chain(
             f"scale={out_w}:{out_h}:flags=lanczos,setsar=1,format=yuv420p[v{index}]"
         ),
     ]
+
+
+def _punch_times(
+    punches: list[punch_module.Punch],
+    plan: tighten.TightenPlan | None,
+    *,
+    start_s: float,
+    output_end_s: float,
+) -> list[tuple[float, float, float, float, float]]:
+    """Punches lifted onto the output timeline.
+
+    Returns ``(start, ease_end, hold_end, end, zoom)`` per punch. Source-
+    absolute word times are lifted to clip-relative, remapped through the
+    tighten plan when one is active, and clamped to the rendered output. A
+    punch compressed below :data:`punch.MIN_OUTPUT_DURATION_S` of output time
+    — mostly tightened away by silence speeding — is dropped rather than
+    flickered, and its eased phases scale with whatever compression it did
+    survive so the move stays smooth inside a shorter window.
+    """
+    lifted: list[tuple[float, float, float, float, float]] = []
+    for punch in punches:
+        rel_start = punch.start_s - start_s
+        rel_end = punch.end_s - start_s
+        if plan is not None:
+            out_start = plan.remap(plan.start_s + rel_start)
+            out_end = plan.remap(plan.start_s + rel_end)
+        else:
+            out_start, out_end = rel_start, rel_end
+        out_end = min(out_end, output_end_s)
+        if out_end - out_start < punch_module.MIN_OUTPUT_DURATION_S:
+            continue
+        # Scale the eased phases with the compression so the shape of the
+        # move survives: a punch that lost 20% of its window eases 20% faster.
+        scale = (out_end - out_start) / punch.duration_s
+        lifted.append(
+            (
+                out_start,
+                out_start + (punch.zoom_in_end_s - punch.start_s) * scale,
+                out_start + (punch.hold_end_s - punch.start_s) * scale,
+                out_end,
+                punch.zoom,
+            )
+        )
+    return lifted
+
+
+def _punch_filter(
+    request: ExportRequest,
+    plan: tighten.TightenPlan | None,
+    out_w: int,
+    out_h: int,
+) -> str:
+    """The punch-in zoompan chain for this clip, or '' for none.
+
+    One zoompan renders every punch as a piecewise ``z`` expression over the
+    frame counter (``on``): smoothstep ease-in, hold at peak, smoothstep ease-
+    back, 1.0 elsewhere. Smoothstep's zero-velocity endpoints are what make
+    the move read as a camera push rather than a jump. Centering ``x``/``y``
+    on the frame keeps the zoom framed on the subject instead of drifting.
+    """
+    punches = request.punches or []
+    if not punches:
+        return ""
+
+    output_end_s = plan.output_duration_s if plan is not None else request.duration_s
+    times = _punch_times(punches, plan, start_s=request.start_s, output_end_s=output_end_s)
+    if not times:
+        return ""
+
+    fps = PUNCH_FPS
+
+    def smoothstep(u: str) -> str:
+        return f"(3*pow({u},2)-2*pow({u},3))"
+
+    # One nested-if branch per punch, built in reverse so each else-branch is
+    # the already-built expression for later time. Every phase boundary is a
+    # frame count: zoompan's ``on`` increments once per output frame.
+    expression = "1"
+    for out_start, ease_end, hold_end, out_end, zoom in reversed(times):
+        in_frames = max(1, round((ease_end - out_start) * fps))
+        hold_frames = max(1, round((hold_end - ease_end) * fps))
+        out_frames = max(1, round((out_end - hold_end) * fps))
+        start_frame = out_start * fps
+        end_frame = out_end * fps
+        peak = 1.0 + zoom
+
+        expression = (
+            f"if(lt(on,{start_frame + in_frames:.0f}),"
+            f"1+{zoom:.4f}*{smoothstep(f'(on-{start_frame:.3f})/{in_frames}')},"
+            f"if(lt(on,{start_frame + in_frames + hold_frames:.0f}),"
+            f"{peak:.4f},"
+            f"if(lt(on,{end_frame:.0f}),"
+            f"1+{zoom:.4f}*(1-"
+            f"{smoothstep(f'(on-{start_frame + in_frames + hold_frames:.3f})/{out_frames}')}),"
+            f"{expression})))"
+        )
+
+    return (
+        f"fps={fps},zoompan=z='{expression}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+        f"d=1:s={out_w}x{out_h}:fps={fps}"
+    )
 
 
 def _zoom_filter(zoom: float, out_w: int, out_h: int) -> str:

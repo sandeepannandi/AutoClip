@@ -50,6 +50,21 @@ def _load_silences(workspace: JobWorkspace) -> list[Silence]:
         return []
 
 
+def _load_punches(clip, words: list[Word], settings) -> list:
+    """Punch-in events for a manual re-export, or [] when disabled/unanchored."""
+    from ..pipeline import punch as punch_module
+
+    if not settings.export.punch_ins or not clip.emphasis_words:
+        return []
+    try:
+        return punch_module.build_punches(
+            words, clip.emphasis_words, zoom=settings.export.punch_zoom
+        )
+    except Exception:
+        log.exception("Punch build failed for clip %s; re-exporting without.", clip.id)
+        return []
+
+
 def _clip_out(clip) -> ClipOut:
     edit = store.get_clip_edit(clip.id)
     exports = store.list_exports(clip.id)
@@ -278,6 +293,7 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         color_grade=payload.color_grade or settings.export.color_grade,
         primary_color=edit.caption_color if edit else None,
         silences=_load_silences(workspace),
+        punches=_load_punches(clip, words, settings),
     )
 
     try:

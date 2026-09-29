@@ -154,6 +154,9 @@ class ClipOut(BaseModel):
     #: The model's independent read on why a stranger would stop for this clip
     #: (usable, entertaining, or energizing), 0-100.
     value_score: int = 50
+    #: Phrases the model flagged as the quotable moment — the punch-in zoom
+    #: anchors. Source-quoted, so they may not match the transcript verbatim.
+    emphasis_words: list[str] = Field(default_factory=list)
     reason: str
     status: str
     user_trimmed: bool
@@ -190,6 +193,7 @@ class ClipOut(BaseModel):
             score=clip.score,
             hook_strength=clip.hook_strength,
             value_score=clip.value_score,
+            emphasis_words=list(clip.emphasis_words),
             reason=clip.reason,
             status=clip.status,
             user_trimmed=clip.user_trimmed,

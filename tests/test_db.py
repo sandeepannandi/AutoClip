@@ -253,6 +253,31 @@ class TestClips:
 
         assert listed[0].value_score == 50
 
+    def test_emphasis_words_round_trips(self, job: Job) -> None:
+        store.replace_clips(
+            job.id, [self._clip(job, 1, emphasis_words=["agencies die", "ten clients"])]
+        )
+
+        listed = store.list_clips(job.id)
+
+        assert listed[0].emphasis_words == ["agencies die", "ten clients"]
+
+    def test_emphasis_words_default_when_absent(self, job: Job) -> None:
+        # A clip produced before punch-ins existed reads back as empty —
+        # nothing to anchor a zoom to, so none is built.
+        with db.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO clips (id, job_id, rank, start_s, end_s, title, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (new_id(), job.id, 1, 0.0, 50.0, "Legacy", "2026-01-01T00:00:00+00:00"),
+            )
+
+        listed = store.list_clips(job.id)
+
+        assert listed[0].emphasis_words == []
+
     def test_update_clip_records_a_trim(self, job: Job) -> None:
         clip = self._clip(job, 1)
         store.replace_clips(job.id, [clip])

@@ -67,6 +67,7 @@ export interface Clip {
   score: number
   hook_strength: number
   value_score: number
+  emphasis_words: string[]
   reason: string
   status: ClipStatus
   user_trimmed: boolean
@@ -158,6 +159,8 @@ export interface Settings {
     crf: number
     write_srt: boolean
     color_grade: string
+    punch_ins: boolean
+    punch_zoom: number
   }
   insecure_secret_storage: boolean
   keys_present: Record<string, boolean>

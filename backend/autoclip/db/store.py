@@ -246,9 +246,9 @@ def replace_clips(job_id: str, clips: list[Clip]) -> list[Clip]:
         conn.executemany(
             """
             INSERT INTO clips (id, job_id, rank, start_s, end_s, start_word, end_word,
-                               title, hook, score, hook_strength, value_score, reason,
-                               status, user_trimmed, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               title, hook, score, hook_strength, value_score,
+                               emphasis_words, reason, status, user_trimmed, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             [
                 (
@@ -264,6 +264,7 @@ def replace_clips(job_id: str, clips: list[Clip]) -> list[Clip]:
                     c.score,
                     c.hook_strength,
                     c.value_score,
+                    json.dumps(c.emphasis_words),
                     c.reason,
                     c.status,
                     int(c.user_trimmed),

@@ -133,6 +133,12 @@ class ExportSettings(BaseModel):
     #: Air kept at normal speed on each side of a tightened gap, so the
     #: fast-forward transition never sits flush against a word.
     keep_silence_s: float = 0.12
+    #: Ease the frame in ~8% on the emphasized words and back out — the
+    #: kinetic-cut energy viral edits use, rendered as a smooth camera move.
+    #: See pipeline/punch.py.
+    punch_ins: bool = True
+    #: Peak zoom of a punch-in, as a fraction above 1.0.
+    punch_zoom: float = 0.08
 
 
 class Settings(BaseModel):

@@ -12,7 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from autoclip.pipeline import captions, export
+from autoclip.pipeline import captions, export, punch
 from autoclip.pipeline.reframe.croppath import (
     CropKeyframe,
     CropPath,
@@ -153,3 +153,37 @@ class TestGrades:
 
     def test_grade_filters_returns_noop_for_none(self) -> None:
         assert export.grade_filters("none") == ""
+
+
+class TestPunches:
+    """The punch-in zoompan sits after the grade, before the captions."""
+
+    @staticmethod
+    def _request_with_punches(**kwargs) -> export.ExportRequest:
+        request = _request(**kwargs)
+        request.punches = [
+            punch.Punch(
+                start_s=1.0,
+                zoom_in_end_s=1.3,
+                hold_end_s=1.8,
+                end_s=2.2,
+                zoom=punch.DEFAULT_ZOOM,
+            )
+        ]
+        return request
+
+    def test_no_punches_adds_no_zoompan(self) -> None:
+        graph = export.build_video_filtergraph(_request(), subtitle_name="captions.ass")
+
+        assert "vpunch" not in graph
+        assert "zoompan" not in graph
+
+    def test_punch_chain_runs_after_grade_before_captions(self) -> None:
+        graph = export.build_video_filtergraph(
+            self._request_with_punches(color_grade="warm"), subtitle_name="captions.ass"
+        )
+
+        assert "[vgrade]fps=30,zoompan=z='" in graph
+        # The peak zoom flows into the expression as 1 + zoom.
+        assert "1.0800" in graph
+        assert graph.endswith("[vpunch]ass=filename=captions.ass:fontsdir=fonts[vout]")

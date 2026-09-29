@@ -173,6 +173,22 @@ def _migration_v7(conn: sqlite3.Connection) -> None:
     )
 
 
+def _migration_v8(conn: sqlite3.Connection) -> None:
+    """Persist the model's emphasis words on each clip.
+
+    A JSON list of short phrases the model flagged as the payoff — the words a
+    human editor would put on screen at full size. Export reads them to place
+    punch-in zooms; empty means the clip carries no emphasis data (older rows,
+    or a model that never returned any).
+    """
+    conn.executescript(
+        """
+        ALTER TABLE clips
+            ADD COLUMN emphasis_words TEXT NOT NULL DEFAULT '[]';
+        """
+    )
+
+
 def _migration_v1(conn: sqlite3.Connection) -> None:
     conn.executescript(_V1)
 
@@ -228,6 +244,7 @@ MIGRATIONS: list[Callable[[sqlite3.Connection], None]] = [
     _migration_v5,
     _migration_v6,
     _migration_v7,
+    _migration_v8,
 ]
 
 SCHEMA_VERSION = len(MIGRATIONS)

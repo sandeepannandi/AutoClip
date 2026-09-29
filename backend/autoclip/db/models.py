@@ -31,6 +31,17 @@ def utcnow() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
+def _json_list(raw: object) -> list[str]:
+    """Decode a stored JSON string list; anything malformed reads as empty."""
+    if not raw or not isinstance(raw, str):
+        return []
+    try:
+        parsed = json.loads(raw)
+    except ValueError:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
 @dataclass
 class Source:
     id: str
@@ -146,6 +157,9 @@ class Clip:
     #: (usable, entertaining, or energizing), 0-100. Ranked against ``score``
     #: and ``hook_strength`` (blended) and shown in the review UI.
     value_score: int = 50
+    #: Short phrases the model flagged as the payoff — the words a human editor
+    #: would put on screen at full size. Export places punch-in zooms on them.
+    emphasis_words: list[str] = field(default_factory=list)
     reason: str = ""
     status: ClipStatus = "candidate"
     user_trimmed: bool = False
@@ -170,6 +184,7 @@ class Clip:
             score=row["score"],
             hook_strength=row["hook_strength"],
             value_score=row["value_score"],
+            emphasis_words=_json_list(row["emphasis_words"]),
             reason=row["reason"],
             status=row["status"],
             user_trimmed=bool(row["user_trimmed"]),

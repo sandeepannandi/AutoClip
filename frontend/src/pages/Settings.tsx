@@ -275,6 +275,24 @@ export function Settings() {
           />
           Also write an .srt sidecar
         </label>
+
+        <label className="mt-4 flex items-start gap-3 text-sm text-ink-200">
+          <input
+            type="checkbox"
+            checked={settings.export.punch_ins}
+            onChange={(e) =>
+              patch({ export: { ...settings.export, punch_ins: e.target.checked } })
+            }
+            className="mt-0.5 size-4 accent-sodium-500"
+          />
+          <span>
+            Punch-in zooms on emphasized lines
+            <span className="mt-1 block text-xs text-ink-500">
+              Eases the frame in ~8% on the payoff words and back out — the kinetic edit
+              viral clips use. Two per clip max, never on the hook.
+            </span>
+          </span>
+        </label>
       </Section>
 
       {system && (

@@ -25,7 +25,7 @@ from ..db import store
 from ..db.models import Clip, Export, Job, Source, new_id, utcnow
 from ..db.models import Transcript as TranscriptRow
 from ..providers import build_provider, detection_config
-from . import Stage, captions, export, ffmpeg, highlights, prepare, transcribe
+from . import Stage, captions, export, ffmpeg, highlights, prepare, punch, transcribe
 from .prepare import Silence
 from .reframe import ReframeConfig, build_crop_path
 from .reframe.croppath import CropPath
@@ -347,6 +347,21 @@ class PipelineRunner:
         captions.get_style(self.settings.export.caption_style)
         self._finish_stage(stage)
 
+    def _clip_punches(self, clip: Clip, words: list) -> list[punch.Punch]:
+        """Punch-in events for one clip, or [] when disabled or unanchored."""
+        if not self.settings.export.punch_ins or not clip.emphasis_words:
+            return []
+        try:
+            return punch.build_punches(
+                words,
+                clip.emphasis_words,
+                zoom=self.settings.export.punch_zoom,
+            )
+        except Exception:
+            # A punch is decoration; a failure must never fail an export.
+            log.exception("Punch build failed for clip %s; rendering without.", clip.id)
+            return []
+
     def _stage_export(
         self,
         clips: list[Clip],
@@ -388,6 +403,7 @@ class PipelineRunner:
                 ),
                 primary_color=edit.caption_color if edit else None,
                 silences=silences,
+                punches=self._clip_punches(clip, words),
             )
 
             def clip_progress(fraction: float, i: int = index) -> None:
