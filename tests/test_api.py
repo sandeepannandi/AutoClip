@@ -90,6 +90,64 @@ class TestCaptionStyles:
         assert preview["maxWords"] > 0
 
 
+class TestLooks:
+    def test_lists_all_five(self, client: TestClient) -> None:
+        looks = client.get("/api/looks").json()
+
+        assert [look["key"] for look in looks] == [
+            "hormozi",
+            "viral",
+            "cinematic",
+            "podcast",
+            "cool",
+        ]
+        # Every look pairs a real caption preset with a real grade; the API
+        # would 500 on export otherwise.
+        style_keys = {s["key"] for s in client.get("/api/caption-styles").json()}
+        for look in looks:
+            assert look["caption_style"] in style_keys
+
+    def test_apply_look_updates_every_clip(self, client: TestClient, job_with_clips: Job) -> None:
+        response = client.post(
+            f"/api/jobs/{job_with_clips.id}/apply-look", json={"look": "hormozi"}
+        )
+
+        assert response.status_code == 200
+        clips = response.json()
+        assert len(clips) == 3
+        assert all(c["caption_style"] == "bold_pop" for c in clips)
+        assert all(c["color_grade"] == "punchy" for c in clips)
+
+    def test_apply_look_preserves_unrelated_edit_fields(
+        self, client: TestClient, job_with_clips: Job
+    ) -> None:
+        clips = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()
+        client.patch(
+            f"/api/clips/{clips[0]['id']}/captions",
+            json={"ratio": "1:1", "caption_color": "#FF00FF"},
+        )
+
+        client.post(f"/api/jobs/{job_with_clips.id}/apply-look", json={"look": "viral"})
+
+        clip = client.get(f"/api/clips/{clips[0]['id']}").json()
+        assert clip["ratio"] == "1:1"
+        assert clip["caption_color"] == "#ff00ff"
+        assert clip["caption_style"] == "karaoke_fill"
+        assert clip["color_grade"] == "warm"
+
+    def test_unknown_look_is_rejected(self, client: TestClient, job_with_clips: Job) -> None:
+        response = client.post(
+            f"/api/jobs/{job_with_clips.id}/apply-look", json={"look": "explosion"}
+        )
+
+        assert response.status_code == 400
+
+    def test_unknown_job_is_404(self, client: TestClient) -> None:
+        response = client.post("/api/jobs/does-not-exist/apply-look", json={"look": "viral"})
+
+        assert response.status_code == 404
+
+
 class TestSettings:
     def test_get_returns_defaults(self, client: TestClient) -> None:
         body = client.get("/api/settings").json()
@@ -252,29 +310,31 @@ class TestJobs:
         assert client.post("/api/jobs/nope/retry").status_code == 404
 
 
-class TestClips:
-    @pytest.fixture
-    def job_with_clips(self, source: Source) -> Job:
-        job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
-        store.replace_clips(
-            job.id,
-            [
-                Clip(
-                    id=new_id(),
-                    job_id=job.id,
-                    rank=rank,
-                    start_s=rank * 60.0,
-                    end_s=rank * 60.0 + 40.0,
-                    start_word=rank * 100,
-                    end_word=rank * 100 + 80,
-                    title=f"Clip {rank}",
-                    score=90 - rank,
-                )
-                for rank in (1, 2, 3)
-            ],
-        )
-        return job
+@pytest.fixture
+def job_with_clips(source: Source) -> Job:
+    """A finished job with three clips, shared by the clip and look tests."""
+    job = store.create_job(Job(id=new_id(), source_id=source.id, status="done"))
+    store.replace_clips(
+        job.id,
+        [
+            Clip(
+                id=new_id(),
+                job_id=job.id,
+                rank=rank,
+                start_s=rank * 60.0,
+                end_s=rank * 60.0 + 40.0,
+                start_word=rank * 100,
+                end_word=rank * 100 + 80,
+                title=f"Clip {rank}",
+                score=90 - rank,
+            )
+            for rank in (1, 2, 3)
+        ],
+    )
+    return job
 
+
+class TestClips:
     def test_list_clips_for_a_job(self, client: TestClient, job_with_clips: Job) -> None:
         clips = client.get(f"/api/jobs/{job_with_clips.id}/clips").json()
 

@@ -239,6 +239,20 @@ class ExportRequestIn(BaseModel):
     color_grade: str | None = None
 
 
+class LookOut(BaseModel):
+    key: str
+    label: str
+    description: str
+    #: The look's parts, so the UI can show the pairing and detect which look
+    #: (if any) a clip's current style+grade corresponds to.
+    caption_style: str
+    color_grade: str
+
+
+class ApplyLookIn(BaseModel):
+    look: str
+
+
 class CaptionStyleOut(BaseModel):
     key: str
     label: str

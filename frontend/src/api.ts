@@ -109,6 +109,15 @@ export interface CropPath {
   segments: CropSegment[]
 }
 
+/** One named look: a caption preset paired with a colour grade. */
+export interface Look {
+  key: string
+  label: string
+  description: string
+  caption_style: string
+  color_grade: string
+}
+
 export interface CaptionStyle {
   key: string
   label: string
@@ -362,6 +371,12 @@ export const api = {
     }),
 
   captionStyles: () => request<CaptionStyle[]>('/api/caption-styles'),
+  looks: () => request<Look[]>('/api/looks'),
+  applyLook: (jobId: string, look: string) =>
+    request<Clip[]>(`/api/jobs/${jobId}/apply-look`, {
+      method: 'POST',
+      body: JSON.stringify({ look }),
+    }),
   providerStatus: () => request<ProviderStatus[]>('/api/providers/status'),
 
   getSettings: () => request<Settings>('/api/settings'),

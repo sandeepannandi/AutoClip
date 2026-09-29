@@ -10,6 +10,7 @@ import {
   type Clip,
   type CropPath,
   type Job,
+  type Look,
   type Word,
 } from '../api'
 import { CaptionEditor } from '../components/CaptionEditor'
@@ -39,6 +40,8 @@ export function Review() {
   const [job, setJob] = useState<Job | null>(null)
   const [clips, setClips] = useState<Clip[]>([])
   const [styles, setStyles] = useState<CaptionStyle[]>([])
+  const [looks, setLooks] = useState<Look[]>([])
+  const [applyingLook, setApplyingLook] = useState(false)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [words, setWords] = useState<Word[]>([])
   const [cropPath, setCropPath] = useState<CropPath | null>(null)
@@ -51,11 +54,12 @@ export function Review() {
 
   useEffect(() => {
     if (!jobId) return
-    void Promise.all([api.getJob(jobId), api.listClips(jobId), api.captionStyles()])
-      .then(([loadedJob, loadedClips, loadedStyles]) => {
+    void Promise.all([api.getJob(jobId), api.listClips(jobId), api.captionStyles(), api.looks()])
+      .then(([loadedJob, loadedClips, loadedStyles, loadedLooks]) => {
         setJob(loadedJob)
         setClips(loadedClips)
         setStyles(loadedStyles)
+        setLooks(loadedLooks)
         setSelectedId((current) => current ?? loadedClips[0]?.id ?? null)
       })
       .catch((err) => setError(err as Error))
@@ -153,6 +157,26 @@ export function Review() {
       patchClip(await api.patchCaptions(clip.id, { caption_color: colour }))
     } catch (err) {
       setError(err as Error)
+    }
+  }
+
+  const applyLook = async (clip: Clip, look: Look) => {
+    try {
+      patchClip(await api.patchCaptions(clip.id, look))
+    } catch (err) {
+      setError(err as Error)
+    }
+  }
+
+  const applyLookToAll = async (look: Look) => {
+    if (!jobId) return
+    setApplyingLook(true)
+    try {
+      setClips(await api.applyLook(jobId, look.key))
+    } catch (err) {
+      setError(err as Error)
+    } finally {
+      setApplyingLook(false)
     }
   }
 
@@ -309,6 +333,50 @@ export function Review() {
                   saving={savingWords}
                   dirty={wordsDirty}
                 />
+
+                <div>
+                  <div className="flex items-center justify-between border-b border-ink-800 pb-2">
+                    <p className="eyebrow">Look</p>
+                    {applyingLook && (
+                      <span className="text-xs text-ink-500">Applying…</span>
+                    )}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {looks.map((look) => {
+                      // A clip matches a look when both parts line up; the
+                      // highlighted pill shows which look (if any) is active.
+                      const active =
+                        !!selected &&
+                        selected.caption_style === look.caption_style &&
+                        selected.color_grade === look.color_grade
+                      return (
+                        <span key={look.key} className="group relative inline-flex">
+                          <button
+                            onClick={() => selected && applyLook(selected, look)}
+                            disabled={!selected || applyingLook}
+                            title={look.description}
+                            className={[
+                              'rounded-full border px-3.5 py-1.5 text-sm transition-colors duration-200 disabled:opacity-50',
+                              active
+                                ? 'border-sodium-500 bg-sodium-500/10 text-ink-100'
+                                : 'border-ink-700 text-ink-300 hover:border-ink-500 hover:text-ink-100',
+                            ].join(' ')}
+                          >
+                            {look.label}
+                          </button>
+                          <button
+                            onClick={() => applyLookToAll(look)}
+                            disabled={applyingLook}
+                            title="Apply to all clips in this job"
+                            className="absolute -top-2 -right-2 hidden size-5 items-center justify-center rounded-full border border-ink-600 bg-ink-850 text-[10px] leading-none text-ink-300 group-hover:flex hover:border-sodium-500 hover:text-ink-100 disabled:opacity-50"
+                          >
+                            all
+                          </button>
+                        </span>
+                      )
+                    })}
+                  </div>
+                </div>
 
                 <div>
                   <p className="eyebrow border-b border-ink-800 pb-2">Caption style</p>

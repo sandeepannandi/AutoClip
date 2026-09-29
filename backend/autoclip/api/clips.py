@@ -14,20 +14,23 @@ from fastapi.responses import FileResponse
 from .. import paths
 from ..config import load as load_settings
 from ..db import store
-from ..db.models import Export, new_id
+from ..db.models import ClipEdit, Export, new_id
 from ..pipeline import captions as captions_module
 from ..pipeline import export as export_module
+from ..pipeline import looks as looks_module
 from ..pipeline.prepare import Silence
 from ..pipeline.reframe.croppath import CropPath, centre_crop
 from ..pipeline.runner import JobWorkspace
 from ..pipeline.transcript import Transcript, Word
 from .schemas import (
+    ApplyLookIn,
     CaptionPatchIn,
     CaptionStyleOut,
     ClipOut,
     ClipPatchIn,
     ExportOut,
     ExportRequestIn,
+    LookOut,
     WordOut,
 )
 
@@ -63,6 +66,16 @@ def _load_punches(clip, words: list[Word], settings) -> list:
     except Exception:
         log.exception("Punch build failed for clip %s; re-exporting without.", clip.id)
         return []
+
+
+def _look_out(look) -> LookOut:
+    return LookOut(
+        key=look.key,
+        label=look.label,
+        description=look.description,
+        caption_style=look.caption_style,
+        color_grade=look.color_grade,
+    )
 
 
 def _clip_out(clip) -> ClipOut:
@@ -382,6 +395,52 @@ async def caption_styles() -> list[CaptionStyleOut]:
     ]
 
 
+@router.get("/looks", response_model=list[LookOut])
+async def looks() -> list[LookOut]:
+    """Named looks — caption preset + colour grade pairs, one click each."""
+    return [_look_out(look) for look in looks_module.all_looks()]
+
+
+@router.post("/jobs/{job_id}/apply-look", response_model=list[ClipOut])
+async def apply_look(job_id: str, payload: ApplyLookIn) -> list[ClipOut]:
+    """Apply one look to every clip in a job.
+
+    A look maps onto the caption_style and color_grade fields the captions
+    endpoint already persists, so each clip receives an ordinary edit merge —
+    per-clip word edits, ratios, and colour overrides are untouched.
+    """
+    try:
+        look = looks_module.get_look(payload.look)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    job = await asyncio.to_thread(store.get_job, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found.")
+
+    clips = await asyncio.to_thread(store.list_clips, job_id)
+    for clip in clips:
+        await asyncio.to_thread(store.upsert_clip_edit, _merged_edit(clip.id, look))
+
+    return [await asyncio.to_thread(_clip_out, clip) for clip in clips]
+
+
+def _merged_edit(clip_id: str, look: looks_module.Look) -> ClipEdit:
+    """The clip's existing edit with the look's style and grade applied.
+
+    Mirrors the merge in ``patch_captions``: fields the look doesn't own keep
+    their current value, and an edit row is created for clips that had none.
+    """
+    existing = store.get_clip_edit(clip_id)
+    return ClipEdit(
+        clip_id=clip_id,
+        edited_words=existing.edited_words if existing else None,
+        caption_style=look.caption_style,
+        ratio=existing.ratio if existing else "9:16",
+        caption_position=existing.caption_position if existing else "bottom",
+        color_grade=look.color_grade,
+        caption_color=existing.caption_color if existing else None,
+    )
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
