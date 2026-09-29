@@ -161,6 +161,7 @@ export interface Settings {
     color_grade: string
     punch_ins: boolean
     punch_zoom: number
+    filler_word_cleanup: boolean
   }
   insecure_secret_storage: boolean
   keys_present: Record<string, boolean>

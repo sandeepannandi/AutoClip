@@ -293,6 +293,24 @@ export function Settings() {
             </span>
           </span>
         </label>
+
+        <label className="mt-4 flex items-start gap-3 text-sm text-ink-200">
+          <input
+            type="checkbox"
+            checked={settings.export.filler_word_cleanup}
+            onChange={(e) =>
+              patch({ export: { ...settings.export, filler_word_cleanup: e.target.checked } })
+            }
+            className="mt-0.5 size-4 accent-sodium-500"
+          />
+          <span>
+            Leave filler words out of captions
+            <span className="mt-1 block text-xs text-ink-500">
+              Um, uh and similar hesitations are dropped from the burned-in text — captions
+              read clean. Footage and audio are untouched.
+            </span>
+          </span>
+        </label>
       </Section>
 
       {system && (

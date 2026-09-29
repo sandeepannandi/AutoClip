@@ -404,6 +404,7 @@ class PipelineRunner:
                 primary_color=edit.caption_color if edit else None,
                 silences=silences,
                 punches=self._clip_punches(clip, words),
+                filler_word_cleanup=self.settings.export.filler_word_cleanup,
             )
 
             def clip_progress(fraction: float, i: int = index) -> None:

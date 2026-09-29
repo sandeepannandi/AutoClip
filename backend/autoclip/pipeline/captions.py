@@ -37,6 +37,34 @@ DEFAULT_MAX_GAP_S = 0.4
 #: output size, so a preset looks identical at 9:16, 1:1, and 16:9.
 REFERENCE_HEIGHT = 1920
 
+#: Spoken hesitation sounds. Burning these into captions wastes a line and
+#: reads as amateur; dropping them changes no pixels of the footage or audio.
+#: Long asides built from real words ("you know", "I mean") are deliberately
+#: excluded — a word-list can't tell an aside from the sentence's point.
+FILLER_WORDS: frozenset[str] = frozenset(
+    {"um", "uh", "erm", "er", "ah", "uhm", "hmm", "mm", "mmm", "mmhm", "uhhuh"}
+)
+
+
+def drop_filler_words(
+    words: list[Word], *, enabled: bool = True
+) -> list[Word]:
+    """The caption words without hesitation sounds.
+
+    Matching is on the lowercased, punctuation-stripped token, so "Um," still
+    matches. Dropped words leave a timing gap; the grouper already breaks on
+    gaps, and per-word events hold each group to its end, so no extra repair
+    is needed. When ``enabled`` is false the list passes through unchanged.
+    """
+    if not enabled:
+        return words
+
+    def is_filler(word: Word) -> bool:
+        token = "".join(ch for ch in word.text.lower() if ch.isalnum())
+        return token in FILLER_WORDS
+
+    return [word for word in words if not is_filler(word)]
+
 
 def hex_to_ass(colour: str, alpha: int = 0) -> pysubs2.Color:
     """Convert ``#RRGGBB`` to a pysubs2 colour.

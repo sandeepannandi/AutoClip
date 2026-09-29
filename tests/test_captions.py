@@ -386,3 +386,60 @@ class TestAssGeneration:
         reloaded = pysubs2.load(str(path), encoding="utf-8")
         colour = reloaded.styles[captions.STYLE_NAME].primarycolor
         assert (colour.r, colour.g, colour.b) == (255, 229, 0)
+
+
+class TestFillerWordCleanup:
+    """Hesitation sounds leave the captions, never the timeline."""
+
+    def test_filler_words_are_dropped(self) -> None:
+        words = evenly_spaced(["um", "nobody", "tells", "uh", "you", "this"])
+
+        kept = captions.drop_filler_words(words)
+
+        assert [w.text for w in kept] == ["nobody", "tells", "you", "this"]
+
+    def test_matching_ignores_case_and_punctuation(self) -> None:
+        words = evenly_spaced(["Um,", "so", "UH."])
+
+        kept = captions.drop_filler_words(words)
+
+        assert [w.text for w in kept] == ["so"]
+
+    def test_real_words_are_never_dropped(self) -> None:
+        # "her" and "hm"-like substrings must not be caught by prefix matching.
+        words = evenly_spaced(["the", "mother", "hums", "her", "hummingbird"])
+
+        kept = captions.drop_filler_words(words)
+
+        assert [w.text for w in kept] == ["the", "mother", "hums", "her", "hummingbird"]
+
+    def test_disabled_passes_through_unchanged(self) -> None:
+        words = evenly_spaced(["um", "so"])
+
+        assert captions.drop_filler_words(words, enabled=False) is words
+
+    def test_dropped_fillers_shrink_the_caption_groups(self) -> None:
+        # "um" sits between real words: with cleanup on, the burned-in lines
+        # contain only the real words.
+        words = evenly_spaced(["um", "nobody", "tells", "you", "this"])
+
+        subs = captions.build_ass(
+            captions.drop_filler_words(words),
+            captions.get_style("bold_pop"),
+            width=404,
+            height=720,
+        )
+
+        rendered = " ".join(e.text for e in subs.events)
+        assert "UM" not in rendered
+        assert "NOBODY" in rendered
+
+    def test_word_timings_are_untouched(self) -> None:
+        # Dropping fillers removes words; the kept words keep their own start
+        # and end times so the captions stay locked to the audio.
+        words = evenly_spaced(["um", "nobody", "tells"])
+
+        kept = captions.drop_filler_words(words)
+
+        assert kept[0].start == pytest.approx(words[1].start)
+        assert kept[0].end == pytest.approx(words[1].end)

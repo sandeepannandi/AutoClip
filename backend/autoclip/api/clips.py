@@ -294,6 +294,7 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         primary_color=edit.caption_color if edit else None,
         silences=_load_silences(workspace),
         punches=_load_punches(clip, words, settings),
+        filler_word_cleanup=settings.export.filler_word_cleanup,
     )
 
     try:

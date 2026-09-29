@@ -100,6 +100,9 @@ class ExportRequest:
     #: before captions — the text stays static and legible while the footage
     #: moves. Empty renders nothing extra.
     punches: list[punch_module.Punch] | None = None
+    #: Leave um/uh and other hesitation sounds out of the burned-in captions.
+    #: Captions only — footage and audio are untouched.
+    filler_word_cleanup: bool = False
 
     @property
     def duration_s(self) -> float:
@@ -682,7 +685,11 @@ def export_clip(
     render_cwd: Path | None = None
 
     if request.burn_captions and request.words:
-        words = _remap_words(request, plan)
+        words = _remap_words(
+            request,
+            plan,
+            drop_fillers=request.filler_word_cleanup,
+        )
         ass_path = captions_module.write_ass(
             workspace / "captions.ass",
             words,
@@ -768,7 +775,10 @@ def export_clip(
     if settings.write_srt and request.words:
         captions_module.write_srt(
             request.destination.with_suffix(".srt"),
-            _remap_words(request, plan),
+            captions_module.drop_filler_words(
+                _remap_words(request, plan),
+                enabled=request.filler_word_cleanup,
+            ),
             time_offset_s=request.start_s,
         )
 
@@ -784,17 +794,22 @@ def export_clip(
 
 
 def _remap_words(
-    request: ExportRequest, plan: tighten.TightenPlan | None
+    request: ExportRequest,
+    plan: tighten.TightenPlan | None,
+    *,
+    drop_fillers: bool = False,
 ) -> list[Word]:
     """Words moved onto the tightened output timeline.
 
     The ASS file must be timed to the rendered video, so word start/end times
     go through the plan's remap. Without a plan the words pass through
-    untouched. The ``write_ass`` call below then subtracts the clip start, so
-    remap operates on absolute source times here.
+    untouched (fillers still drop when ``drop_fillers`` is set — the caption
+    list shrinks, the timeline does not). The ``write_ass`` call below then
+    subtracts the clip start, so remap operates on absolute source times here.
     """
+    words = request.words
     if plan is None:
-        return request.words
+        return captions_module.drop_filler_words(words, enabled=drop_fillers)
     remapped = []
     for word in request.words:
         remapped.append(
@@ -805,4 +820,4 @@ def _remap_words(
                 speaker=word.speaker,
             )
         )
-    return remapped
+    return captions_module.drop_filler_words(remapped, enabled=drop_fillers)

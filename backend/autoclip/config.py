@@ -139,6 +139,9 @@ class ExportSettings(BaseModel):
     punch_ins: bool = True
     #: Peak zoom of a punch-in, as a fraction above 1.0.
     punch_zoom: float = 0.08
+    #: Leave um/uh and other hesitation sounds out of the burned-in captions.
+    #: Captions only — footage and audio are untouched. See captions.py.
+    filler_word_cleanup: bool = True
 
 
 class Settings(BaseModel):
