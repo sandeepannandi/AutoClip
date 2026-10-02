@@ -135,8 +135,9 @@ class ExportSettings(BaseModel):
     keep_silence_s: float = 0.12
     #: Ease the frame in ~8% on the emphasized words and back out — the
     #: kinetic-cut energy viral edits use, rendered as a smooth camera move.
-    #: See pipeline/punch.py.
-    punch_ins: bool = True
+    #: Off by default; a zoom is a stylistic choice, not a baseline. Enable in
+    #: settings. See pipeline/punch.py.
+    punch_ins: bool = False
     #: Peak zoom of a punch-in, as a fraction above 1.0.
     punch_zoom: float = 0.08
     #: Leave um/uh and other hesitation sounds out of the burned-in captions.
