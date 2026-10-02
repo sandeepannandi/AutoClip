@@ -696,7 +696,6 @@ def export_clip(
             request.style,
             width=out_w,
             height=out_h,
-            time_offset_s=request.start_s,
             position=request.caption_position,
             primary_override=request.primary_color,
         )
@@ -779,7 +778,6 @@ def export_clip(
                 _remap_words(request, plan),
                 enabled=request.filler_word_cleanup,
             ),
-            time_offset_s=request.start_s,
         )
 
     saved = plan.saved_s if plan is not None else 0.0
@@ -799,17 +797,28 @@ def _remap_words(
     *,
     drop_fillers: bool = False,
 ) -> list[Word]:
-    """Words moved onto the tightened output timeline.
+    """Words on the clip-relative output timeline, ready for the subtitle file.
 
-    The ASS file must be timed to the rendered video, so word start/end times
-    go through the plan's remap. Without a plan the words pass through
-    untouched (fillers still drop when ``drop_fillers`` is set — the caption
-    list shrinks, the timeline does not). The ``write_ass`` call below then
-    subtracts the clip start, so remap operates on absolute source times here.
+    The plan's remap maps source-absolute times straight onto the tightened,
+    clip-relative output (``t <= plan.start_s`` becomes ``t - plan.start_s``),
+    and without a plan the same shift is applied by hand — either way the
+    result is already clip-relative, so the ``write_ass``/``write_srt`` calls
+    below pass ``time_offset_s=0``. Subtracting the clip start a second time
+    there clamped every caption to a zero-length event and burned nothing.
+    Fillers still drop when ``drop_fillers`` is set — the caption list
+    shrinks, the timeline does not.
     """
-    words = request.words
     if plan is None:
-        return captions_module.drop_filler_words(words, enabled=drop_fillers)
+        shifted = [
+            Word(
+                text=word.text,
+                start=max(0.0, word.start - request.start_s),
+                end=max(1e-3, word.end - request.start_s),
+                speaker=word.speaker,
+            )
+            for word in request.words
+        ]
+        return captions_module.drop_filler_words(shifted, enabled=drop_fillers)
     remapped = []
     for word in request.words:
         remapped.append(

@@ -13,12 +13,15 @@ from pathlib import Path
 
 import pytest
 from autoclip.pipeline import captions, export, punch
+from autoclip.pipeline.prepare import Silence
 from autoclip.pipeline.reframe.croppath import (
     CropKeyframe,
     CropPath,
     CropSegment,
     Strategy,
 )
+from autoclip.pipeline.tighten import build_plan
+from autoclip.pipeline.transcript import Word
 
 TRACKING_GRADES: list[str] = ["warm", "punchy", "cool", "film"]
 
@@ -187,3 +190,41 @@ class TestPunches:
         # The peak zoom flows into the expression as 1 + zoom.
         assert "1.0800" in graph
         assert graph.endswith("[vpunch]ass=filename=captions.ass:fontsdir=fonts[vout]")
+
+
+class TestWordRemap:
+    """Caption words must land on the clip-relative output timeline exactly once."""
+
+    @staticmethod
+    def _request_with_words() -> export.ExportRequest:
+        base = 3045.75  # a mid-video clip start, like real jobs produce
+        request = _request()
+        request.start_s = base
+        request.end_s = base + 5.0
+        phrase = "nobody tells you this but most agencies die".split()  # noqa: SIM905
+        request.words = [
+            Word(text=token, start=base + i * 0.5, end=base + i * 0.5 + 0.45, speaker=None)
+            for i, token in enumerate(phrase)
+        ]
+        return request
+
+    def test_untightened_words_are_clip_relative(self) -> None:
+        words = export._remap_words(self._request_with_words(), None)
+
+        assert words[0].start == pytest.approx(0.0)
+        assert words[-1].end == pytest.approx(3.95)
+
+    def test_tightened_words_are_not_shifted_twice(self) -> None:
+        # Regression: remap already returns clip-relative output times, and the
+        # subtitle writer subtracted the clip start again — every event clamped
+        # to 0:00:00.00 and captions burned in invisibly.
+        request = self._request_with_words()
+        plan = build_plan(request.start_s, request.end_s, [Silence(start=3050.0, end=3051.0)])
+
+        words = export._remap_words(request, plan)
+
+        assert words[0].start == pytest.approx(0.0, abs=0.01)
+        assert words[-1].end <= plan.output_duration_s + 0.01
+        # The tighten plan compresses later words forward, it does not push
+        # them off the front of the video.
+        assert all(word.end > word.start for word in words)
