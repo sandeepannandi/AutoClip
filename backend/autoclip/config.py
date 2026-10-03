@@ -143,6 +143,11 @@ class ExportSettings(BaseModel):
     #: Leave um/uh and other hesitation sounds out of the burned-in captions.
     #: Captions only — footage and audio are untouched. See captions.py.
     filler_word_cleanup: bool = True
+    #: Crossfade the clip's last moments into its first so the end flows back
+    #: into the beginning with no visible cut. Feeds replay looping clips, and
+    #: rewatches are what the algorithm rewards. Off by default — like punch-
+    #: ins, a stylistic choice rather than a baseline. See export.py.
+    seamless_loop: bool = False
 
 
 class Settings(BaseModel):

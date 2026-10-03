@@ -308,6 +308,7 @@ async def export_clip(clip_id: str, payload: ExportRequestIn) -> ExportOut:
         silences=_load_silences(workspace),
         punches=_load_punches(clip, words, settings),
         filler_word_cleanup=settings.export.filler_word_cleanup,
+        seamless_loop=settings.export.seamless_loop,
     )
 
     try:

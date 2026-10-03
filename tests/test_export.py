@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from autoclip.config import ExportSettings
 from autoclip.pipeline import captions, export, punch
 from autoclip.pipeline.prepare import Silence
 from autoclip.pipeline.reframe.croppath import (
@@ -190,6 +191,103 @@ class TestPunches:
         # The peak zoom flows into the expression as 1 + zoom.
         assert "1.0800" in graph
         assert graph.endswith("[vpunch]ass=filename=captions.ass:fontsdir=fonts[vout]")
+
+
+class TestSeamlessLoop:
+    """The loop blend sits after punches, before captions — and audio matches."""
+
+    @staticmethod
+    def _looping_request(**kwargs) -> export.ExportRequest:
+        request = _request(**kwargs)
+        request.seamless_loop = True
+        return request
+
+    def test_disabled_renders_unchanged(self) -> None:
+        graph = export.build_video_filtergraph(_request(), subtitle_name="captions.ass")
+
+        assert "xfade" not in graph
+        assert graph.endswith("[v0]ass=filename=captions.ass:fontsdir=fonts[vout]")
+
+    def test_loop_crossfades_tail_into_head(self) -> None:
+        graph = export.build_video_filtergraph(
+            self._looping_request(), subtitle_name="captions.ass"
+        )
+
+        # 5s clip, 0.4s fade: the head copy starts exactly where the blend
+        # begins, and xfade consumes the tail without extending the output.
+        # Both branches re-assert fps — xfade demands CFR inputs.
+        assert "[v0]fps=30,split=2[vloopmain][vloophead]," in graph
+        assert "[vloophead]trim=start=4.6000,setpts=PTS-STARTPTS,fps=30[vhead]" in graph
+        assert "[vloopmain][vhead]xfade=transition=fade:duration=0.4000:offset=4.6000[vloop]"
+        assert graph.endswith("[vloop]ass=filename=captions.ass:fontsdir=fonts[vout]")
+
+    def test_loop_chain_runs_after_grade_and_punch(self) -> None:
+        request = self._looping_request(color_grade="warm")
+        request.punches = [
+            punch.Punch(
+                start_s=1.0,
+                zoom_in_end_s=1.3,
+                hold_end_s=1.8,
+                end_s=2.2,
+                zoom=punch.DEFAULT_ZOOM,
+            )
+        ]
+        graph = export.build_video_filtergraph(request, subtitle_name="captions.ass")
+
+        # Grade feeds the punch, the punch feeds the loop, captions come last.
+        assert "[vgrade]fps=30,zoompan=z='" in graph
+        assert "[vpunch]fps=30,split=2[vloopmain][vloophead]," in graph
+        assert graph.endswith("[vloop]ass=filename=captions.ass:fontsdir=fonts[vout]")
+
+    def test_too_short_clips_skip_the_loop(self) -> None:
+        # 1.5s output: below the 4x fade floor, so the graph stays flat.
+        request = self._looping_request()
+        request.end_s = request.start_s + 1.5
+        graph = export.build_video_filtergraph(request, subtitle_name="captions.ass")
+
+        assert "xfade" not in graph
+        assert graph.endswith("[v0]ass=filename=captions.ass:fontsdir=fonts[vout]")
+
+    def test_tightened_loop_uses_plan_output_duration(self) -> None:
+        # Silence 4.5-5.0s inside a 5s clip tightens to ~4.6s of output: the
+        # offset must come from the PLAN duration, not the raw clip duration.
+        request = self._looping_request()
+        request.start_s = 0.0
+        request.end_s = 5.0
+        request.silences = [Silence(start=4.5, end=5.0)]
+        plan = build_plan(request.start_s, request.end_s, request.silences)
+        graph = export.build_video_filtergraph(request, subtitle_name="captions.ass", plan=plan)
+
+        offset = plan.output_duration_s - export.LOOP_FADE_S
+        assert f"[vloophead]trim=start={offset:.4f}" in graph
+        assert f"offset={offset:.4f}" in graph
+
+    def test_loop_fade_skips_short_outputs(self) -> None:
+        assert export.loop_fade_s(1.0) == 0.0
+        assert export.loop_fade_s(export.LOOP_FADE_S * 4) == export.LOOP_FADE_S
+
+    def test_tightened_audio_crossfades_too(self) -> None:
+        request = self._looping_request()
+        request.start_s = 0.0
+        request.end_s = 5.0
+        request.silences = [Silence(start=4.5, end=5.0)]
+        plan = build_plan(request.start_s, request.end_s, request.silences)
+
+        graph = export.build_tightened_audio_filtergraph(
+            request, plan, ExportSettings(tighten_silences=True)
+        )
+
+        assert "asplit=2[aloopmain][aloophead]," in graph
+        assert "acrossfade" in graph
+        assert graph.endswith("[aout]")
+
+    def test_untightened_audio_leaves_graph_flat_without_loop(self) -> None:
+        request = self._looping_request()
+        request.seamless_loop = False
+
+        audio = export._loop_audio_chain(request, None, source_label="[acat]")
+
+        assert audio == ""
 
 
 class TestWordRemap:

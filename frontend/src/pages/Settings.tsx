@@ -311,6 +311,25 @@ export function Settings() {
             </span>
           </span>
         </label>
+
+        <label className="mt-4 flex items-start gap-3 text-sm text-ink-200">
+          <input
+            type="checkbox"
+            checked={settings.export.seamless_loop}
+            onChange={(e) =>
+              patch({ export: { ...settings.export, seamless_loop: e.target.checked } })
+            }
+            className="mt-0.5 size-4 accent-sodium-500"
+          />
+          <span>
+            Seamless loop ending
+            <span className="mt-1 block text-xs text-ink-500">
+              Crossfades the last moments into the first so the clip loops with no visible
+              cut — rewatches are what the algorithm rewards. Skipped on clips too short to
+              blend.
+            </span>
+          </span>
+        </label>
       </Section>
 
       {system && (

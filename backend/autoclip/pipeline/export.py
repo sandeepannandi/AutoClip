@@ -35,6 +35,12 @@ RATIOS: dict[str, tuple[int, int]] = {
     "16:9": (1920, 1080),
 }
 
+#: The seamless-loop crossfade length, in output seconds. Short enough that the
+#: overlap reads as motion rather than as a dissolve; long enough to hide the
+#: cut when the player jumps back to frame 0. Skipped entirely when the clip
+#: is shorter than four times this — there is nothing left to crossfade onto.
+LOOP_FADE_S = 0.4
+
 #: Colour grading presets, each an ffmpeg filter chain applied to the footage
 #: before subtitles are burned in. "none" inserts nothing.
 #:
@@ -103,6 +109,11 @@ class ExportRequest:
     #: Leave um/uh and other hesitation sounds out of the burned-in captions.
     #: Captions only — footage and audio are untouched.
     filler_word_cleanup: bool = False
+    #: Blend the clip's ending into its beginning so looping playback shows no
+    #: cut. The finished footage is rendered twice and crossfaded: the tail
+    #: dissolves into the head over :data:`LOOP_FADE_S`, and the audio does the
+    #: same so nothing pops at the loop point. Off renders exactly as before.
+    seamless_loop: bool = False
 
     @property
     def duration_s(self) -> float:
@@ -396,6 +407,14 @@ def build_video_filtergraph(
         parts.append(f"{current}{punch_chain}[vpunch]")
         current = "[vpunch]"
 
+    loop_chain = _loop_chain(request, plan, source_label=current)
+    if loop_chain:
+        # The loop blend runs on the graded, punched footage — every visual
+        # stage applies identically to head and tail, so the crossfaded frames
+        # match perfectly and only the intended motion dissolve remains.
+        parts.append(loop_chain)
+        current = "[vloop]"
+
     if request.burn_captions and subtitle_name is not None:
         # Bare relative names — ffmpeg runs with its cwd set to the render
         # workspace, so there is nothing here that needs escaping.
@@ -568,6 +587,67 @@ def _zoom_filter(zoom: float, out_w: int, out_h: int) -> str:
     return f"zoompan=z='min(zoom+{zoom / 240:.6f},{end_zoom:.4f})':d=1:s={out_w}x{out_h}:fps=30"
 
 
+def loop_fade_s(output_duration_s: float) -> float:
+    """The loop crossfade length for a clip of this output duration.
+
+    :data:`LOOP_FADE_S` when the clip is long enough to absorb the overlap —
+    head and tail must not eat more than a quarter of the clip between them —
+    and 0.0 when looping should be skipped. A zero or negative result means
+    "no loop"; callers treat that as "render exactly as before".
+    """
+    if output_duration_s < 4.0 * LOOP_FADE_S:
+        return 0.0
+    return LOOP_FADE_S
+
+
+def _loop_chain(
+    request: ExportRequest, plan: tighten.TightenPlan | None, *, source_label: str
+) -> str:
+    """Crossfade the clip's tail into its head, or '' to render untwinned.
+
+    The assembled clip is split in two: the full take, and a head portion
+    trimmed to start where the crossfade should begin. Over the final
+    :data:`LOOP_FADE_S` the tail crossfades into those opening frames, so a
+    player that jumps from last frame back to first shows no cut — the
+    transition already happened on screen.
+
+    ``xfade`` demands both inputs share dimensions, SAR and frame rate; all
+    three come from the same assembled chain, so they match by construction.
+    Output duration is unchanged: the overlap replaces the tail, it does not
+    extend it. Captions burn AFTER the blend, so they stay static through the
+    dissolve — never see themselves fade.
+    """
+    if not request.seamless_loop:
+        return ""
+
+    output_duration = (
+        plan.output_duration_s if plan is not None else request.duration_s
+    )
+    fade = loop_fade_s(output_duration)
+    if fade <= 0.0:
+        log.info(
+            "Seamless loop skipped for the %.1fs clip: shorter than the %.1fs "
+            "crossfade window.",
+            output_duration,
+            LOOP_FADE_S,
+        )
+        return ""
+
+    offset = output_duration - fade
+    if offset <= 0.0:
+        return ""
+    # xfade requires constant-frame-rate inputs; live captures and some
+    # uploads are VFR, and trim+setpts strips the rate metadata anyway. Both
+    # branches therefore re-assert a fixed rate: fps is a no-op on CFR footage
+    # and costs nothing, while guaranteeing the two xfade pads agree.
+    return (
+        f"{source_label}fps=30,split=2[vloopmain][vloophead],"
+        f"[vloophead]trim=start={offset:.4f},setpts=PTS-STARTPTS,fps=30[vhead],"
+        f"[vloopmain][vhead]xfade=transition=fade:duration={fade:.4f}:"
+        f"offset={offset:.4f}[vloop]"
+    )
+
+
 def build_audio_filtergraph(settings: ExportSettings) -> str:
     return f"loudnorm=I={settings.loudness_lufs}:TP={LOUDNESS_TRUE_PEAK}:LRA={LOUDNESS_RANGE}"
 
@@ -608,8 +688,68 @@ def build_tightened_audio_filtergraph(
         parts.append(f"{''.join(labels)}concat=n={len(spans)}:v=0:a=1[acat]")
         current = "[acat]"
 
+    loop_audio = _loop_audio_chain(request, plan, source_label=current)
+    if loop_audio:
+        # The video chain crossfades its tail into its head; the audio must
+        # blend over the same window or the loop point pops.
+        parts.append(loop_audio)
+        current = "[aloop]"
+
     parts.append(f"{current}{build_audio_filtergraph(settings)}[aout]")
     return ";".join(parts)
+
+
+def _loop_audio_chain(
+    request: ExportRequest,
+    plan: tighten.TightenPlan | None,
+    *,
+    source_label: str,
+) -> str:
+    """The audio counterpart of :func:`_loop_chain`, or '' for none.
+
+    Same split-and-crossfade shape as the video: the full mix and a copy of
+    its head, offset so the head's first samples sit where the fade begins,
+    blended by ``acrossfade``. Runs only on the tightened path — the untight-
+    ened export uses ``-af`` and cannot address a second stream, so there the
+    video blend simply fades over whatever sound plays under it, exactly like
+    any in-footage dissolve.
+    """
+    if not request.seamless_loop or plan is None:
+        return ""
+
+    fade = loop_fade_s(plan.output_duration_s)
+    if fade <= 0.0:
+        return ""
+
+    offset = plan.output_duration_s - fade
+    return (
+        f"{source_label}asplit=2[aloopmain][aloophead],"
+        f"[aloophead]atrim=start={offset:.4f},asetpts=PTS-STARTPTS[ahead],"
+        f"[aloopmain][ahead]acrossfade=d={fade:.4f}:c1=tri:c2=tri[aloop]"
+    )
+
+
+def _untightened_loop_audio_filtergraph(
+    request: ExportRequest,
+    settings: ExportSettings,
+) -> str:
+    """The whole audio graph for an untightened looping export.
+
+    Mirrors :func:`_loop_audio_chain` on the raw input stream: the source's
+    clip window is trimmed, its head copied and offset, and the two blended by
+    ``acrossfade`` over the same :data:`LOOP_FADE_S` window the video uses —
+    then ordinary loudness processing. Audio and video end the same length
+    because both crossfades run over the identical window.
+    """
+    fade = loop_fade_s(request.duration_s)
+    offset = request.duration_s - fade
+    return (
+        "[0:a]atrim=start=0:end="
+        f"{request.duration_s:.4f},asetpts=PTS-STARTPTS,asplit=2[aloopmain][aloophead],"
+        f"[aloophead]atrim=start={offset:.4f},asetpts=PTS-STARTPTS[ahead],"
+        f"[aloopmain][ahead]acrossfade=d={fade:.4f}:c1=tri:c2=tri,"
+        f"{build_audio_filtergraph(settings)}[aout]"
+    )
 
 
 def encoder_args(settings: ExportSettings) -> list[str]:
@@ -735,6 +875,19 @@ def export_clip(
         # drift apart. One graph, one -filter_complex.
         full_graph = ";".join(
             [filtergraph, build_tightened_audio_filtergraph(request, plan, settings)]
+        )
+        args.append(full_graph)
+        args += ["-map", "[vout]", "-map", "[aout]"]
+    elif request.seamless_loop and loop_fade_s(request.duration_s) > 0.0:
+        # Looping without tightening: the video chain crossfades its tail into
+        # its head, so plain ``-af`` is no longer enough — the audio's matching
+        # acrossfade joins the same filter_complex, keeping the streams in
+        # lockstep exactly as the tightened path does.
+        full_graph = ";".join(
+            [
+                filtergraph,
+                _untightened_loop_audio_filtergraph(request, settings),
+            ]
         )
         args.append(full_graph)
         args += ["-map", "[vout]", "-map", "[aout]"]

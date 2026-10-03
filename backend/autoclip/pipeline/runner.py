@@ -405,6 +405,7 @@ class PipelineRunner:
                 silences=silences,
                 punches=self._clip_punches(clip, words),
                 filler_word_cleanup=self.settings.export.filler_word_cleanup,
+                seamless_loop=self.settings.export.seamless_loop,
             )
 
             def clip_progress(fraction: float, i: int = index) -> None:

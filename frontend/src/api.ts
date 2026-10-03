@@ -171,6 +171,7 @@ export interface Settings {
     punch_ins: boolean
     punch_zoom: number
     filler_word_cleanup: boolean
+    seamless_loop: boolean
   }
   insecure_secret_storage: boolean
   keys_present: Record<string, boolean>
